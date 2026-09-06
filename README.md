@@ -12,7 +12,7 @@ World State is still a persistent structured representation of the pentest envir
   <img src="./docs/images/agent-world-state.png" alt="Penetration Testing — Agent World State" width="100%">
 </p>
 <p align="center">
-  <em>Propose → validate lifecycle → commit journal + snapshot → deliver delta → replan</em>
+  <em>Store writes World State. Primary receives delivery. Subagents do not.</em>
 </p>
 
 ## Agent World State
@@ -30,7 +30,7 @@ A durable revision cursor records the latest World State revision consumed by ea
 
 ## Thesis
 
-World State is still a persistent structured representation of the pentest environment. It is also an event-driven control loop: committed mutations become ordered revisions, those revisions are delivered only to the primary agent, and the planner chooses the next action from that evidence.
+World State is a persistent structured representation of the pentest environment. It is also an event-driven control loop: committed mutations become ordered revisions, those revisions are delivered only to the primary agent, and the planner chooses the next action from that evidence.
 
 | 1 TX | Primary only | Next turn | Cursor |
 |---|---|---|---|
@@ -47,39 +47,46 @@ flowchart LR
   R["Revision N<br/>flow-scoped BIGINT head<br/>advisory lock serializes allocation"]
   D["Delta / Checkpoint<br/>baseline if no cursor<br/>delta if it fits<br/>checkpoint if limits trip"]
   P["Primary Agent<br/>&lt;world_state&gt; envelope<br/>at the next model-turn boundary"]
-  A["Attack Planner<br/>journal + projection evidence<br/>not a live Graphiti query"]
   N["Next Action<br/>tool, subtask,<br/>or durable ask wait"]
   E["Execution<br/>tool run and result<br/>extract/ingest feeds the next mutation"]
 
-  M --> J --> R --> D --> P --> A --> N --> E
+  M --> J --> R --> D --> P --> N --> E
   E -->|"extract / ingest"| M
 ```
 
 | Stage | What happens |
 |---|---|
-| **State Mutation** | Entity, link, and lifecycle change in one transaction. |
+| **State Mutation** | Entity, link, and lifecycle change in one transaction via `pkg/worldstate.Store`. |
 | **Event Journal** | `world_state_events` appends an ordered fact. |
 | **Revision N** | Flow-scoped `BIGINT` head. Advisory lock serializes allocation. |
 | **Delta / Checkpoint** | Baseline if no cursor. Delta if it fits. Checkpoint if limits trip. |
 | **Primary Agent** | `<world_state>` envelope at the next model-turn boundary. |
-| **Attack Planner** | Journal + projection evidence, not a live Graphiti query. |
-| **Next Action** | Tool, subtask, or durable ask wait. |
+| **Next Action** | Tool, subtask, or durable ask wait. `performPlanner` still calls adviser. `pkg/attackplan` is not on this path. |
 | **Execution** | Tool run and result. Extract/ingest feeds the next mutation. |
 
 Return path: **Execution → extract/ingest → State Mutation**.
 
-## What the old diagram still gets right
+## Write path
 
-**Agents.** Researcher, Developer, Executor, Human, and System propose observations. They do not write PostgreSQL. Tool output goes through `WorldStateService`.
+World State rows are written only by `pkg/worldstate.Store`. Agents never issue SQL. `researcher` / `executor` / `human` / `system` are journal actor labels, not five separate agents.
 
-**Lifecycle.** `unknown → discovered → scanning → assessed → vulnerable → exploited → remediated`. `WorldStateService` validates each transition before commit.
+| Source | Mechanism | Actor |
+|---|---|---|
+| Finished tool output | `IngestToolResult` | `executor` |
+| Primary agent | `world_state_update` | `researcher` |
+| Pentester | `world_state_update` | `executor` |
+| Human | REST candidate review | `human` |
+| Link upserts | Store internals | `system` |
 
-```mermaid
-flowchart LR
-  unknown --> discovered --> scanning --> assessed --> vulnerable --> exploited --> remediated
-```
+The `developer` actor constant exists and is unused.
 
-**Split of stores.** PostgreSQL is operational truth. Graphiti/Neo4j is an optional semantic index. `msglogs`, `termlogs`, and `toolcalls` are execution history, not World State.
+## Lifecycle
+
+`unknown → discovered → scanning → assessed → vulnerable → exploited → remediated`. `ValidateTransition()` rejects anything outside that graph before commit. Allowed skips: `discovered → assessed`, `assessed|vulnerable → remediated`.
+
+## Split of stores
+
+PostgreSQL is operational truth. Graphiti/Neo4j is an optional semantic index and is not synced from `world_state_*`. `msglogs`, `termlogs`, and `toolcalls` are execution history, not World State. REST `WorldStateService` is UI (plus human candidate review); it is not the agent mutation orchestrator.
 
 ## PostgreSQL
 
@@ -91,6 +98,8 @@ flowchart LR
 | `world_state_events` | Ordered journal facts. Revision N is the flow head. | Journal |
 | `world_state_chain_cursors` | What this primary chain has already consumed | Delivery |
 | `agent_chain_waits` | Durable primary ask vs World State wake race | Wake |
+| `world_state_scope` | Allowed domains and CIDRs for ingest | Scope |
+| `world_state_candidates` | Grey-zone hosts waiting for human review | Scope |
 
 ## Delivery selection
 
