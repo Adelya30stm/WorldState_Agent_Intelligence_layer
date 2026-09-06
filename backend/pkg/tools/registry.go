@@ -323,19 +323,19 @@ var registryDefinitions = map[string]llms.FunctionDefinition{
 	},
 	WorldStateQueryToolName: {
 		Name: WorldStateQueryToolName,
-		Description: "Query the authoritative World State entity store for this engagement. " +
-			"Call BEFORE choosing recon/exploit targets to avoid duplicate work. " +
-			"Optional filters: type (host|endpoint|credential|finding) and lifecycle state " +
-			"(unknown|discovered|scanning|assessed|vulnerable|exploited|remediated).",
+		Description: "Function tool (not a shell command) that queries the authoritative World State store. " +
+			"Never invoke via terminal or a fake CLI. Call BEFORE choosing recon/exploit targets. " +
+			"Filter with type/types and state/states (e.g. states=[discovered,scanning] for remaining frontier work).",
 		Parameters: reflector.Reflect(&WorldStateQueryAction{}),
 	},
 	WorldStateUpdateToolName: {
 		Name: WorldStateUpdateToolName,
-		Description: "Create or update a World State entity after a meaningful observation. " +
-			"Use after discovering hosts/endpoints/credentials/findings or advancing lifecycle. " +
-			"Lifecycle transitions must be valid one-step moves: " +
-			"unknown→discovered→scanning→assessed→vulnerable→exploited→remediated " +
-			"(discovered may skip to assessed; assessed/vulnerable may go to remediated).",
+		Description: "Function tool (not a shell command) that creates or updates World State entities. " +
+			"Never invoke via terminal, dummy binaries, or by writing /work logs. " +
+			"Pass entities (max 50) to promote many hosts/endpoints in one call. " +
+			"Lifecycle: unknown→discovered→scanning→assessed→vulnerable→exploited→remediated " +
+			"(discovered may skip to assessed; assessed/vulnerable may go to remediated; discovered→remediated is invalid). " +
+			"No ignored state — set properties.out_of_scope=true and to_state assessed for noise or leftover credentials.",
 		Parameters: reflector.Reflect(&WorldStateUpdateAction{}),
 	},
 	MemoristToolName: {
@@ -389,9 +389,12 @@ var registryDefinitions = map[string]llms.FunctionDefinition{
 		Parameters:  reflector.Reflect(&AskUser{}),
 	},
 	FinalyToolName: {
-		Name:        FinalyToolName,
-		Description: "If you need to finish the task with success or failure, use this tool",
-		Parameters:  reflector.Reflect(&Done{}),
+		Name: FinalyToolName,
+		Description: "Finish the current subtask with success or failure. " +
+			"Successful done is rejected while in-scope hosts, endpoints, or credentials remain in discovered or scanning. " +
+			"Call world_state_update first (entities, max 50): in-scope to assessed; noise to assessed with out_of_scope=true. " +
+			"A /work log is not World State.",
+		Parameters: reflector.Reflect(&Done{}),
 	},
 }
 

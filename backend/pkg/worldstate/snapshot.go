@@ -62,6 +62,7 @@ func FormatSnapshot(entities []database.WorldStateEntity) string {
 	}
 
 	writeGroup("Hosts:", EntityTypeHost)
+	writeGroup("Services:", EntityTypeService)
 	writeGroup("Endpoints:", EntityTypeEndpoint)
 	writeGroup("Credentials:", EntityTypeCredential)
 	writeGroup("Findings:", EntityTypeFinding)

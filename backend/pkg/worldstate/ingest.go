@@ -51,8 +51,12 @@ func IngestToolResult(ctx context.Context, db database.Querier, flowID int64, to
 	}
 
 	for _, c := range candidates {
-		if c.Type != EntityTypeEndpoint {
+		if c.Type != EntityTypeEndpoint && c.Type != EntityTypeService {
 			continue
+		}
+		kind := "found_on"
+		if c.Type == EntityTypeService {
+			kind = "has_service"
 		}
 		host, _ := c.Properties["host"].(string)
 		if host == "" {
@@ -70,14 +74,18 @@ func IngestToolResult(ctx context.Context, db database.Querier, flowID int64, to
 			}
 			hostID = existing.ID
 		}
-		ep, err := db.GetWorldStateEntityByKey(ctx, database.GetWorldStateEntityByKeyParams{
+		child, err := db.GetWorldStateEntityByKey(ctx, database.GetWorldStateEntityByKeyParams{
 			FlowID:    flowID,
 			EntityKey: c.Key,
 		})
 		if err != nil {
 			continue
 		}
-		if _, err := store.Link(ctx, flowID, ep.ID, hostID, "found_on", map[string]any{
+		src, dst := child.ID, hostID
+		if c.Type == EntityTypeService {
+			src, dst = hostID, child.ID
+		}
+		if _, err := store.Link(ctx, flowID, src, dst, kind, map[string]any{
 			"tool": toolName,
 		}); err != nil {
 			logrus.WithContext(ctx).WithError(err).Warn("worldstate: link failed")

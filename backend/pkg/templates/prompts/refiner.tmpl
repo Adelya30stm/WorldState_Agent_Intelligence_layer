@@ -38,6 +38,10 @@ All subtasks are performed in:
    - When `<world_state>` is present, treat it as the authoritative asset map
    - Remove or skip planned subtasks that re-do work on entities already past `discovered` without new justification
    - Prefer refining the plan toward frontier items (discovered / scanning / assessed / vulnerable)
+   - Frontier omits `out_of_scope` entities; do not plan work on them
+   - `world_state_query` / `world_state_update` are function tools, not shell commands. Logs under `/work` are not World State
+   - If a World State reconciliation subtask already finished but in-scope discovered/scanning counts did not move, do not add another clone. One follow-up must use the function tools (batches of ≤50): in-scope → assessed; noise/credentials → assessed + out_of_scope=true
+   - For recon-only requests, assessed is the completion state — do not require remediated
 
 1. **Results-Based Adaptation**
    - Thoroughly analyze completed subtask results and outcomes

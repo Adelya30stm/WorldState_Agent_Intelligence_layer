@@ -876,6 +876,11 @@ func (fp *flowProvider) PerformAgentChain(ctx context.Context, taskID, subtaskID
 						langfuse.WithAgentLevel(langfuse.ObservationLevelWarning),
 					)
 				} else {
+					if entities, wsErr := fp.db.GetWorldStateEntitiesByFlow(ctx, fp.flowID); wsErr != nil {
+						loggerFunc.WithError(wsErr).Warn("world state done guard skipped: load failed")
+					} else if guardErr := worldstate.ErrIncompleteWorldState(entities); guardErr != nil {
+						return "", guardErr
+					}
 					performResult = PerformResultDone
 					opts = append(opts,
 						langfuse.WithAgentStatus("done handler: success"),

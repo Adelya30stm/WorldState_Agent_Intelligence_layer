@@ -146,17 +146,27 @@ type GraphitiSearchAction struct {
 }
 
 type WorldStateQueryAction struct {
-	Type    string `json:"type,omitempty" jsonschema:"enum=host,enum=endpoint,enum=credential,enum=finding" jsonschema_description:"Optional entity type filter"`
-	State   string `json:"state,omitempty" jsonschema:"enum=unknown,enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Optional lifecycle state filter"`
-	Message string `json:"message" jsonschema:"required,title=Query message" jsonschema_description:"Short user-facing note about why you are querying world state, in the user's language"`
+	Type    string   `json:"type,omitempty" jsonschema:"enum=host,enum=endpoint,enum=service,enum=credential,enum=finding" jsonschema_description:"Optional single entity type filter. Combined with types when both are set"`
+	Types   []string `json:"types,omitempty" jsonschema_description:"Optional entity type filters (host, endpoint, service, credential, finding). OR-matched with type"`
+	State   string   `json:"state,omitempty" jsonschema:"enum=unknown,enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Optional single lifecycle state filter. Combined with states when both are set"`
+	States  []string `json:"states,omitempty" jsonschema_description:"Optional lifecycle state filters (e.g. discovered and scanning). OR-matched with state"`
+	Message string   `json:"message" jsonschema:"required,title=Query message" jsonschema_description:"Short user-facing note about why you are querying world state, in the user's language"`
+}
+
+type WorldStateUpdateItem struct {
+	EntityKey  string `json:"entity_key" jsonschema:"required" jsonschema_description:"Canonical key, e.g. host:example.com, endpoint:https://example.com/login, credential:session, finding:cve-2021-44228"`
+	Type       string `json:"type" jsonschema:"required,enum=host,enum=endpoint,enum=service,enum=credential,enum=finding" jsonschema_description:"Entity type"`
+	ToState    string `json:"to_state" jsonschema:"required,enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Target lifecycle state (must be a valid one-step transition from current state). discovered may skip to assessed. discovered to remediated is invalid. There is no ignored state; mark noise with properties.out_of_scope=true and to_state assessed"`
+	Properties string `json:"properties,omitempty" jsonschema_description:"Optional JSON object string with extra entity properties, for example out_of_scope true"`
 }
 
 type WorldStateUpdateAction struct {
-	EntityKey  string `json:"entity_key" jsonschema:"required" jsonschema_description:"Canonical key, e.g. host:example.com, endpoint:https://example.com/login, credential:admin, finding:cve-2021-44228"`
-	Type       string `json:"type" jsonschema:"required,enum=host,enum=endpoint,enum=credential,enum=finding" jsonschema_description:"Entity type"`
-	ToState    string `json:"to_state" jsonschema:"required,enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Target lifecycle state (must be a valid one-step transition from current state)"`
-	Properties string `json:"properties,omitempty" jsonschema_description:"Optional JSON object string with extra entity properties"`
-	Message    string `json:"message" jsonschema:"required,title=Update message" jsonschema_description:"Short user-facing note describing what changed, in the user's language"`
+	EntityKey  string                 `json:"entity_key,omitempty" jsonschema_description:"Canonical key for a single-entity update. Ignored when entities is set"`
+	Type       string                 `json:"type,omitempty" jsonschema:"enum=host,enum=endpoint,enum=service,enum=credential,enum=finding" jsonschema_description:"Entity type for a single-entity update. Ignored when entities is set"`
+	ToState    string                 `json:"to_state,omitempty" jsonschema:"enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Target lifecycle state for a single-entity update. Ignored when entities is set"`
+	Properties string                 `json:"properties,omitempty" jsonschema_description:"Optional JSON object string with extra entity properties for a single-entity update"`
+	Entities   []WorldStateUpdateItem `json:"entities,omitempty" jsonschema:"maxItems=50" jsonschema_description:"Batch of up to 50 entity updates. Prefer this over looping single calls. This tool is a function call, not a shell command"`
+	Message    string                 `json:"message" jsonschema:"required,title=Update message" jsonschema_description:"Short user-facing note describing what changed, in the user's language"`
 }
 
 type EnricherResult struct {

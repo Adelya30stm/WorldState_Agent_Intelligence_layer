@@ -9,6 +9,7 @@ import (
 const (
 	EntityTypeHost       = "host"
 	EntityTypeEndpoint   = "endpoint"
+	EntityTypeService    = "service"
 	EntityTypeFinding    = "finding"
 	EntityTypeCredential = "credential"
 )
@@ -30,7 +31,9 @@ var (
 	cookieHeaderRE  = regexp.MustCompile(`(?i)\b(?:Cookie|Set-Cookie):\s*([^\r\n]+)`)
 	secretFieldRE   = regexp.MustCompile(`(?i)\b(access[_-]?token|refresh[_-]?token|token|api[_-]?key|apikey|client[_-]?secret|private[_-]?key|authorization|auth|secret|cookie|session(?:[_-]?id)?)\s*[=:]\s*([^\s"'\\,;]{3,128})`)
 	userPassRE      = regexp.MustCompile(`(?i)\b(?:user(?:name)?|login)\s*[=:]\s*([^\s"'\\,]{2,64}).{0,80}?(?:password|passwd|pwd)\s*[=:]\s*([^\s"'\\,]{3,64})`)
-	findingHintRE   = regexp.MustCompile(`(?i)\b(SQL injection|XSS|CSRF|RCE|SSRF|IDOR|path traversal|remote code execution|authentication bypass)\b`)
+	nmapReportRE    = regexp.MustCompile(`(?i)^Nmap scan report for (.+)$`)
+	nmapPortRE      = regexp.MustCompile(`(?i)^\s*(\d{1,5})/(tcp|udp)\s+(open(?:\|filtered)?)\s+(\S+)`)
+	nxcServiceRE    = regexp.MustCompile(`(?im)^\s*(SMB|HTTP|HTTPS|SSH|FTP|RDP|LDAP|WINRM)\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,5})\b`)
 )
 
 var noiseHosts = map[string]bool{
@@ -39,6 +42,35 @@ var noiseHosts = map[string]bool{
 	"pkg.go.dev": true, "ubuntu.com": true, "debian.org": true,
 	"symfony.com": true, "google.com": true, "googleapis.com": true,
 	"w3.org": true, "schema.org": true, "microsoft.com": true,
+	"cloudflare.com": true, "cdnjs.cloudflare.com": true,
+	"googletagmanager.com": true, "gstatic.com": true,
+	"jquery.com": true, "jqueryui.com": true, "api.jqueryui.com": true,
+	"builtwith.com": true, "crt.sh": true, "github.io": true,
+}
+
+var noiseHostSuffixes = []string{
+	".cloudfront.net", ".github.io", ".cloudflare.com",
+}
+
+var fileExtTLDs = map[string]bool{
+	"js": true, "css": true, "html": true, "htm": true, "ico": true,
+	"json": true, "map": true, "xml": true, "txt": true, "png": true,
+	"jpg": true, "gif": true, "svg": true, "woff": true, "woff2": true,
+	"ttf": true, "gz": true, "zip": true, "dat": true, "php": true,
+}
+
+var codeHostSuffixes = map[string]bool{
+	"get": true, "set": true, "put": true, "delete": true, "post": true,
+	"pathname": true, "replace": true, "write": true, "length": true,
+	"push": true, "gtag": true, "dialog": true, "search": true,
+	"indexof": true, "min": true, "now": true, "parse": true,
+	"format": true, "encode": true, "decode": true, "split": true,
+	"join": true, "resolve": true, "resolver": true, "lookup": true,
+	"query": true, "fetch": true, "open": true, "close": true,
+	"read": true, "url": true, "path": true, "text": true, "json": true,
+	"data": true, "status": true, "headers": true, "content": true,
+	"body": true, "params": true, "error": true, "result": true,
+	"response": true, "request": true, "handler": true, "method": true,
 }
 
 // ExtractCandidates pulls hosts and endpoints from raw tool output.
@@ -74,7 +106,7 @@ func ExtractCandidates(toolName, result string) []Candidate {
 				"source": "url",
 			},
 		})
-		path := u.Path
+		path := strings.TrimRight(u.Path, "/")
 		if path == "" {
 			path = "/"
 		}
@@ -92,7 +124,7 @@ func ExtractCandidates(toolName, result string) []Candidate {
 	}
 
 	for _, ip := range ipv4RE.FindAllString(safeResult, -1) {
-		if isPrivateOrNoiseIP(ip) {
+		if isNoiseIP(ip) {
 			continue
 		}
 		add(Candidate{
@@ -104,6 +136,9 @@ func ExtractCandidates(toolName, result string) []Candidate {
 			},
 		})
 	}
+
+	extractNmap(safeResult, add)
+	extractNXC(safeResult, add)
 
 	// Bare hostnames (skip if already covered via URL).
 	if looksLikeReconTool(toolName) {
@@ -131,18 +166,6 @@ func ExtractCandidates(toolName, result string) []Candidate {
 			Properties: map[string]any{
 				"cve":    cve,
 				"source": "cve",
-			},
-		})
-	}
-
-	for _, m := range findingHintRE.FindAllString(safeResult, -1) {
-		slug := strings.ToLower(strings.ReplaceAll(m, " ", "_"))
-		add(Candidate{
-			Type: EntityTypeFinding,
-			Key:  "finding:" + slug,
-			Properties: map[string]any{
-				"title":  m,
-				"source": "keyword",
 			},
 		})
 	}
@@ -286,32 +309,184 @@ func maskCredentialMaterial(result string) string {
 	return masked
 }
 
+func extractNmap(result string, add func(Candidate)) {
+	currentHost := ""
+	for _, raw := range strings.Split(result, "\n") {
+		line := strings.TrimSpace(raw)
+		if m := nmapReportRE.FindStringSubmatch(line); len(m) == 2 {
+			currentHost = parseNmapTarget(m[1])
+			if currentHost == "" {
+				continue
+			}
+			props := map[string]any{"host": currentHost, "source": "nmap"}
+			if name := nmapHostname(m[1], currentHost); name != "" {
+				props["hostname"] = name
+			}
+			add(Candidate{Type: EntityTypeHost, Key: "host:" + currentHost, Properties: props})
+			continue
+		}
+		if currentHost == "" {
+			continue
+		}
+		m := nmapPortRE.FindStringSubmatch(line)
+		if len(m) != 5 {
+			continue
+		}
+		port, proto, svc := m[1], strings.ToLower(m[2]), strings.ToLower(m[4])
+		add(Candidate{
+			Type: EntityTypeService,
+			Key:  "service:" + currentHost + ":" + port + "/" + proto,
+			Properties: map[string]any{
+				"host":    currentHost,
+				"port":    port,
+				"proto":   proto,
+				"service": svc,
+				"source":  "nmap",
+			},
+		})
+	}
+}
+
+func extractNXC(result string, add func(Candidate)) {
+	for _, m := range nxcServiceRE.FindAllStringSubmatch(result, -1) {
+		if len(m) < 4 {
+			continue
+		}
+		svc, ip, port := strings.ToLower(m[1]), m[2], m[3]
+		if isNoiseIP(ip) {
+			continue
+		}
+		add(Candidate{
+			Type: EntityTypeHost,
+			Key:  "host:" + ip,
+			Properties: map[string]any{
+				"host":   ip,
+				"source": "nxc",
+			},
+		})
+		add(Candidate{
+			Type: EntityTypeService,
+			Key:  "service:" + ip + ":" + port + "/tcp",
+			Properties: map[string]any{
+				"host":    ip,
+				"port":    port,
+				"proto":   "tcp",
+				"service": svc,
+				"source":  "nxc",
+			},
+		})
+	}
+}
+
+func parseNmapTarget(s string) string {
+	s = strings.TrimSpace(s)
+	if ip := ipv4RE.FindString(s); ip != "" && !isNoiseIP(ip) {
+		return ip
+	}
+	if i := strings.Index(s, " ("); i > 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return canonicalScanHost(s)
+}
+
+func nmapHostname(raw, hostKey string) string {
+	name := strings.TrimSpace(raw)
+	if i := strings.Index(name, " ("); i > 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	name = strings.ToLower(name)
+	if name == "" || name == hostKey {
+		return ""
+	}
+	return name
+}
+
 func canonicalHost(h string) string {
 	h = strings.ToLower(strings.TrimSpace(h))
 	h = strings.TrimPrefix(h, "www.")
 	if strings.Contains(h, ":") {
 		h = strings.Split(h, ":")[0]
 	}
-	if len(h) < 3 || !strings.Contains(h, ".") {
+	if len(h) < 3 || !strings.Contains(h, ".") || !isPlausibleHost(h) {
 		return ""
 	}
 	return h
 }
 
-func isPrivateOrNoiseIP(ip string) bool {
+func isPlausibleHost(h string) bool {
+	if h == "" || noiseHosts[h] {
+		return false
+	}
+	for _, suffix := range noiseHostSuffixes {
+		if strings.HasSuffix(h, suffix) {
+			return false
+		}
+	}
+	if strings.Contains(h, "_") {
+		return false
+	}
+	parts := strings.Split(h, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	tld := parts[len(parts)-1]
+	if len(tld) > 8 || fileExtTLDs[tld] || codeHostSuffixes[tld] {
+		return false
+	}
+	return true
+}
+
+func canonicalScanHost(h string) string {
+	if ip := ipv4RE.FindString(h); ip != "" && !isNoiseIP(ip) {
+		return ip
+	}
+	if fqdn := canonicalHost(h); fqdn != "" && !noiseHosts[fqdn] {
+		return fqdn
+	}
+	h = strings.ToLower(strings.TrimSpace(h))
+	if len(h) < 2 || len(h) > 63 || strings.ContainsAny(h, " ./:@") {
+		return ""
+	}
+	if noiseHosts[h] || nmapNoiseWords[h] {
+		return ""
+	}
+	return h
+}
+
+var nmapNoiseWords = map[string]bool{
+	"nmap": true, "scan": true, "report": true, "host": true, "port": true,
+	"open": true, "tcp": true, "udp": true, "filtered": true, "closed": true,
+	"unknown": true, "starting": true, "done": true, "latency": true,
+}
+
+func isNoiseIP(ip string) bool {
 	parts := strings.Split(ip, ".")
 	if len(parts) != 4 {
 		return true
 	}
-	// 0.x, 127.x, 10.x, 192.168.x, 172.16-31.x
-	if parts[0] == "0" || parts[0] == "127" || parts[0] == "10" {
+	octets := make([]int, 4)
+	for i, p := range parts {
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return true
+			}
+			n = n*10 + int(c-'0')
+			if n > 255 {
+				return true
+			}
+		}
+		if len(p) > 1 && p[0] == '0' {
+			return true
+		}
+		octets[i] = n
+	}
+	switch octets[0] {
+	case 0, 127, 255:
 		return true
 	}
-	if parts[0] == "192" && parts[1] == "168" {
+	if octets[0] >= 224 {
 		return true
-	}
-	if parts[0] == "172" {
-		return true // coarse; good enough for noise filter
 	}
 	return false
 }

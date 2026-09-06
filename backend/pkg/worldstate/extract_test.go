@@ -40,6 +40,77 @@ func TestExtractSkipsNoise(t *testing.T) {
 	}
 }
 
+func TestExtractLabNmapWritesHostAndService(t *testing.T) {
+	result := `Nmap scan report for dc01 (10.0.0.5)
+Host is up (0.001s latency).
+PORT     STATE SERVICE
+22/tcp   open  ssh
+445/tcp  open  microsoft-ds
+`
+	cands := ExtractCandidates("terminal", result)
+	want := map[string]bool{
+		"host:10.0.0.5":               false,
+		"service:10.0.0.5:22/tcp":     false,
+		"service:10.0.0.5:445/tcp":    false,
+	}
+	for _, c := range cands {
+		if _, ok := want[c.Key]; ok {
+			want[c.Key] = true
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("missing %q in %+v", key, keys(cands))
+		}
+	}
+}
+
+func TestExtractPrivateIPIsAHost(t *testing.T) {
+	cands := ExtractCandidates("terminal", "ping 192.168.56.10")
+	saw := false
+	for _, c := range cands {
+		if c.Key == "host:192.168.56.10" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("expected RFC1918 host, got %+v", keys(cands))
+	}
+}
+
+func TestExtractSkipsLoopback(t *testing.T) {
+	cands := ExtractCandidates("terminal", "connected to 127.0.0.1")
+	for _, c := range cands {
+		if c.Type == EntityTypeHost {
+			t.Fatalf("did not expect loopback host: %s", c.Key)
+		}
+	}
+}
+
+func TestExtractNXCSMB(t *testing.T) {
+	cands := ExtractCandidates("terminal", "SMB         192.168.56.10    445    DC01    [*] signing:false")
+	wantHost, wantSvc := false, false
+	for _, c := range cands {
+		if c.Key == "host:192.168.56.10" {
+			wantHost = true
+		}
+		if c.Key == "service:192.168.56.10:445/tcp" && c.Properties["service"] == "smb" {
+			wantSvc = true
+		}
+	}
+	if !wantHost || !wantSvc {
+		t.Fatalf("expected SMB host+service, got %+v", keys(cands))
+	}
+}
+
+func keys(cands []Candidate) []string {
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.Key)
+	}
+	return out
+}
+
 func TestLooksLikeActiveScan(t *testing.T) {
 	if !looksLikeActiveScan("terminal", "running nmap -sV target") {
 		t.Fatal("expected active scan")
@@ -79,6 +150,56 @@ Cookie: session=synthetic-cookie-sentinel`
 		if !found {
 			t.Fatalf("missing stable credential identity %q", key)
 		}
+	}
+}
+
+func TestExtractSkipsKeywordFindingsAndCodeHosts(t *testing.T) {
+	result := `Plan: Test for SQL injection, IDOR, RCE and authentication bypass.
+See location.pathname, document.write, arguments.length, window.gtag,
+index-ciwxgrft.js, favicon-16x16.ico, 404.html, next.js.
+CDN: https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.0/fingerprint2.min.js
+Alive: https://demo.mokka.ru/ and https://backend.test.mokka.ru/
+`
+	cands := ExtractCandidates("terminal", result)
+	sawDemo, sawBackend := false, false
+	demoEndpoints := 0
+	for _, c := range cands {
+		switch {
+		case strings.HasPrefix(c.Key, "finding:") && !strings.Contains(c.Key, "cve-"):
+			t.Fatalf("keyword finding leaked: %s", c.Key)
+		case c.Key == "host:location.pathname", c.Key == "host:document.write",
+			c.Key == "host:arguments.length", c.Key == "host:window.gtag",
+			c.Key == "host:index-ciwxgrft.js", c.Key == "host:favicon-16x16.ico",
+			c.Key == "host:404.html", c.Key == "host:next.js",
+			c.Key == "host:cdnjs.cloudflare.com":
+			t.Fatalf("code/noise host leaked: %s", c.Key)
+		case c.Key == "host:demo.mokka.ru":
+			sawDemo = true
+		case c.Key == "host:backend.test.mokka.ru":
+			sawBackend = true
+		}
+		if c.Type == EntityTypeEndpoint && strings.Contains(c.Key, "demo.mokka.ru") {
+			demoEndpoints++
+		}
+	}
+	if !sawDemo || !sawBackend {
+		t.Fatalf("expected mokka hosts, got %+v", keys(cands))
+	}
+	if demoEndpoints != 1 {
+		t.Fatalf("expected one demo endpoint, got %d in %+v", demoEndpoints, keys(cands))
+	}
+}
+
+func TestExtractKeepsCVEFindings(t *testing.T) {
+	cands := ExtractCandidates("terminal", "Found CVE-2021-44228 on login")
+	saw := false
+	for _, c := range cands {
+		if c.Key == "finding:cve-2021-44228" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("expected CVE finding, got %+v", keys(cands))
 	}
 }
 

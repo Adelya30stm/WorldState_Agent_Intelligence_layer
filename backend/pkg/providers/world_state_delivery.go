@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"pentagi/pkg/cast"
 	"pentagi/pkg/database"
@@ -57,12 +59,12 @@ func (fp *flowProvider) injectWorldStateForTurn(
 	nextChain, delivered, err := fp.worldState.Inject(ctx, chainID, chain)
 	if err != nil {
 		logger.WithError(err).Warn("failed to inject World State delivery")
-		return chain
+		return uniqueToolUseIDs(chain)
 	}
-	if !delivered {
-		return chain
+	if delivered {
+		return uniqueToolUseIDs(nextChain)
 	}
-	return nextChain
+	return uniqueToolUseIDs(chain)
 }
 
 func newPrimaryWorldStateTurnInjector(db database.Querier, flowID int64) primaryWorldStateTurnInjector {
@@ -105,6 +107,15 @@ func (i *databasePrimaryWorldStateTurnInjector) Inject(
 	if delivery.Empty() {
 		return chain, false, nil
 	}
+	if delivery.Kind == worldstate.DeliveryDelta {
+		current, err := i.builder.Build(ctx, i.flowID, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("build World State current projection: %w", err)
+		}
+		if !current.Empty() {
+			delivery = current
+		}
+	}
 	if !json.Valid(delivery.Payload) {
 		return nil, false, fmt.Errorf("format World State delivery: invalid JSON payload")
 	}
@@ -117,12 +128,15 @@ func (i *databasePrimaryWorldStateTurnInjector) Inject(
 	return nextChain, delivered, nil
 }
 
+var worldStateEnvelopeRE = regexp.MustCompile(`(?s)<` + worldStateEnvelopeTag + `>\s*.*?</` + worldStateEnvelopeTag + `>`)
+
 func appendWorldStateEnvelope(chain []llms.MessageContent, envelope string) ([]llms.MessageContent, error) {
 	chainCopy := make([]llms.MessageContent, len(chain))
 	for idx := range chain {
 		chainCopy[idx] = chain[idx]
 		chainCopy[idx].Parts = append([]llms.ContentPart(nil), chain[idx].Parts...)
 	}
+	stripWorldStateEnvelopes(chainCopy)
 	if len(chainCopy) > 0 && chainCopy[len(chainCopy)-1].Role == llms.ChatMessageTypeHuman {
 		last := &chainCopy[len(chainCopy)-1]
 		last.Parts = append(last.Parts, llms.TextContent{Text: envelope})
@@ -137,6 +151,26 @@ func appendWorldStateEnvelope(chain []llms.MessageContent, envelope string) ([]l
 	}
 	ast.AppendHumanMessage(envelope)
 	return uniqueToolUseIDs(ast.Messages()), nil
+}
+
+func stripWorldStateEnvelopes(chain []llms.MessageContent) {
+	for i := range chain {
+		parts := make([]llms.ContentPart, 0, len(chain[i].Parts))
+		for _, part := range chain[i].Parts {
+			text, ok := part.(llms.TextContent)
+			if !ok {
+				parts = append(parts, part)
+				continue
+			}
+			stripped := strings.TrimSpace(worldStateEnvelopeRE.ReplaceAllString(text.Text, ""))
+			if stripped == "" {
+				continue
+			}
+			text.Text = stripped
+			parts = append(parts, text)
+		}
+		chain[i].Parts = parts
+	}
 }
 
 // uniqueToolUseIDs drops or renames duplicate tool_use IDs so Anthropic will

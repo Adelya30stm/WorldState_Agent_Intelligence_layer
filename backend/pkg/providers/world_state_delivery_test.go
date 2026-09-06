@@ -80,12 +80,19 @@ func (s *primaryDeliveryStoreStub) Persist(
 type turnInjectorStub struct {
 	calls int
 	err   error
+	empty bool
 	next  []llms.MessageContent
 }
 
 func (s *turnInjectorStub) Inject(context.Context, int64, []llms.MessageContent) ([]llms.MessageContent, bool, error) {
 	s.calls++
-	return s.next, s.err == nil, s.err
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	if s.empty {
+		return nil, false, nil
+	}
+	return s.next, true, nil
 }
 
 func TestWorldStateTurnPrimaryOnlyAndFailSoft(t *testing.T) {
@@ -116,6 +123,22 @@ func TestWorldStateTurnPrimaryOnlyAndFailSoft(t *testing.T) {
 	}
 }
 
+func TestWorldStateTurnDedupesWhenDeliveryEmpty(t *testing.T) {
+	dup := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeSystem, "system"),
+		{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{
+			llms.ToolCall{ID: "dup", Type: "function", FunctionCall: &llms.FunctionCall{Name: "query", Arguments: `{}`}},
+			llms.ToolCall{ID: "dup", Type: "function", FunctionCall: &llms.FunctionCall{Name: "query", Arguments: `{}`}},
+		}},
+		{Role: llms.ChatMessageTypeTool, Parts: []llms.ContentPart{
+			llms.ToolCallResponse{ToolCallID: "dup", Name: "query", Content: "ok"},
+		}},
+	}
+	fp := &flowProvider{worldState: &turnInjectorStub{empty: true}}
+	got := fp.injectWorldStateForTurn(t.Context(), pconfig.OptionsTypePrimaryAgent, 1, dup, worldStateTestLogger())
+	assertUniqueToolUseIDs(t, got)
+}
+
 func TestWorldStateDeliveryKindsAndToolOrdering(t *testing.T) {
 	for _, kind := range []worldstate.DeliveryKind{
 		worldstate.DeliveryBaseline, worldstate.DeliveryDelta, worldstate.DeliveryCheckpoint,
@@ -128,8 +151,14 @@ func TestWorldStateDeliveryKindsAndToolOrdering(t *testing.T) {
 			}
 			store := newPrimaryStore(cursor)
 			builder := primaryDeliveryBuilderFunc(func(_ context.Context, flowID int64, got *int64) (worldstate.PrimaryDelivery, error) {
-				if flowID != 7 || (kind == worldstate.DeliveryBaseline) != (got == nil) || (got != nil && *got != 2) {
-					t.Fatalf("unexpected build input: flow=%d cursor=%v", flowID, got)
+				if flowID != 7 {
+					t.Fatalf("unexpected flow: %d", flowID)
+				}
+				if got == nil {
+					return delivery(worldstate.DeliveryBaseline, 5), nil
+				}
+				if *got != 2 {
+					t.Fatalf("unexpected cursor: %v", *got)
 				}
 				return delivery(kind, 5), nil
 			})
@@ -278,6 +307,38 @@ func TestWorldStateDeliveryDedupesIDsOnPendingHumanBoundary(t *testing.T) {
 	assertUniqueToolUseIDs(t, got)
 	if _, err := cast.NewChainAST(got, false); err != nil {
 		t.Fatalf("human-boundary chain is invalid: %v", err)
+	}
+}
+
+func TestWorldStateDeliveryReplacesPreviousEnvelope(t *testing.T) {
+	original := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeSystem, "system"),
+		llms.TextParts(llms.ChatMessageTypeHuman, "request\n<world_state>\n{\"stale\":true}\n</world_state>"),
+	}
+	got, err := appendWorldStateEnvelope(original, "<world_state>\n{\"fresh\":true}\n</world_state>")
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+	if !chainContains(got, `"fresh":true`) {
+		t.Fatalf("missing fresh envelope: %#v", got)
+	}
+	if chainContains(got, `"stale":true`) {
+		t.Fatalf("stale envelope was kept: %#v", got)
+	}
+	envelopes := 0
+	for _, message := range got {
+		for _, part := range message.Parts {
+			if text, ok := part.(llms.TextContent); ok {
+				for i := 0; i+len("<world_state>") <= len(text.Text); i++ {
+					if text.Text[i:i+len("<world_state>")] == "<world_state>" {
+						envelopes++
+					}
+				}
+			}
+		}
+	}
+	if envelopes != 1 {
+		t.Fatalf("want one envelope, got %d: %#v", envelopes, got)
 	}
 }
 

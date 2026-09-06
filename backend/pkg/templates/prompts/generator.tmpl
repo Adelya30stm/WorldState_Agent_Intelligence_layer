@@ -108,6 +108,9 @@ When `<world_state>` is present:
 2. Do NOT create subtasks that re-enumerate assets already in `scanning`, `assessed`, or `vulnerable` unless the user explicitly asks or evidence is stale.
 3. Prefer consolidating work on existing hosts/endpoints over discovering unrelated noise domains.
 4. If world_state is empty, prioritize initial reconnaissance that will populate it.
+5. `world_state_query` / `world_state_update` are function tools used during execution, not shell commands. A finished subtask that only wrote `/work/*.log` did NOT update World State.
+6. If a "reconcile / finalize World State" subtask already finished but in-scope `discovered`/`scanning` remain, do NOT clone another identically titled cleanup. Keep a single follow-up that must call the function tools in batches of ≤50: in-scope → `assessed`, noise/credentials → `assessed` with `out_of_scope=true`.
+7. Frontier omits `out_of_scope` entities. For recon-only user tasks, `assessed` is done — do not require `remediated`.
 
 ## STRATEGIC SEARCH USAGE
 

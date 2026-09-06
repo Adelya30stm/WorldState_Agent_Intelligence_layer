@@ -81,7 +81,9 @@ function describe(call: WorldStateToolCall): { description: string; title: strin
     const message = str(args.message);
 
     if (call.name === 'world_state_query') {
-        const filters = [str(args.type), str(args.state)].filter(Boolean).join(' · ');
+        const filters = [str(args.type), list(args.types), str(args.state), list(args.states)]
+            .filter(Boolean)
+            .join(' · ');
         let found = '';
 
         try {
@@ -100,9 +102,10 @@ function describe(call: WorldStateToolCall): { description: string; title: strin
     }
 
     // world_state_update
+    const batch = Array.isArray(args.entities) ? args.entities.length : 0;
     const key = str(args.entity_key);
     const toState = str(args.to_state);
-    const transition = [key, toState].filter(Boolean).join(' → ');
+    const transition = batch > 0 ? `batch ${batch}` : [key, toState].filter(Boolean).join(' → ');
     const description = [message, transition].filter(Boolean).join('\n');
 
     return { description: description || 'Agent wrote World State', title: '✏️ world_state_update' };
@@ -124,4 +127,8 @@ function notify(call: WorldStateToolCall): void {
 
 function str(v: unknown): string {
     return typeof v === 'string' ? v : '';
+}
+
+function list(v: unknown): string {
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0).join(',') : '';
 }
