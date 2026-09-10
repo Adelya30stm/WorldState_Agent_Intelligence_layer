@@ -704,6 +704,7 @@ func (fte *flowToolsExecutor) GetAssistantExecutor(cfg AssistantExecutorConfig) 
 		summarizer:  cfg.Summarizer,
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -870,6 +871,7 @@ func (fte *flowToolsExecutor) GetInstallerExecutor(cfg InstallerExecutorConfig) 
 		ce.handlers[SearchGuideToolName] = guide.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -962,6 +964,7 @@ func (fte *flowToolsExecutor) GetCoderExecutor(cfg CoderExecutorConfig) (Context
 		ce.handlers[GraphitiSearchToolName] = graphitiSearch.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -1243,6 +1246,7 @@ func (fte *flowToolsExecutor) GetSearcherExecutor(cfg SearcherExecutorConfig) (C
 		ce.handlers[StoreAnswerToolName] = search.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -1308,6 +1312,7 @@ func (fte *flowToolsExecutor) GetGeneratorExecutor(cfg GeneratorExecutorConfig) 
 		ce.handlers[BrowserToolName] = browser.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -1373,6 +1378,7 @@ func (fte *flowToolsExecutor) GetRefinerExecutor(cfg RefinerExecutorConfig) (Con
 		ce.handlers[BrowserToolName] = browser.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -1441,6 +1447,7 @@ func (fte *flowToolsExecutor) GetMemoristExecutor(cfg MemoristExecutorConfig) (C
 		ce.handlers[GraphitiSearchToolName] = graphitiSearch.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -1523,6 +1530,7 @@ func (fte *flowToolsExecutor) GetEnricherExecutor(cfg EnricherExecutorConfig) (C
 		ce.handlers[BrowserToolName] = browser.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
 }
 
@@ -1531,7 +1539,7 @@ func (fte *flowToolsExecutor) GetReporterExecutor(cfg ReporterExecutorConfig) (C
 		return nil, fmt.Errorf("report result handler is required")
 	}
 
-	return &customExecutor{
+	ce := &customExecutor{
 		flowID:      fte.flowID,
 		taskID:      cfg.TaskID,
 		subtaskID:   cfg.SubtaskID,
@@ -1542,7 +1550,9 @@ func (fte *flowToolsExecutor) GetReporterExecutor(cfg ReporterExecutorConfig) (C
 		definitions: []llms.FunctionDefinition{registryDefinitions[ReportResultToolName]},
 		handlers:    map[string]ExecutorHandler{ReportResultToolName: cfg.ReportResult},
 		barriers:    map[string]struct{}{ReportResultToolName: {}},
-	}, nil
+	}
+	fte.registerWorldStateQuery(ce)
+	return ce, nil
 }
 
 func (fte *flowToolsExecutor) GetWebReporterExecutor(cfg WebReporterExecutorConfig) (ContextToolsExecutor, error) {
@@ -1586,7 +1596,19 @@ func (fte *flowToolsExecutor) GetWebReporterExecutor(cfg WebReporterExecutorConf
 		ce.handlers[StoreGuideToolName] = guide.Handle
 	}
 
+	fte.registerWorldStateQuery(ce)
 	return ce, nil
+}
+
+// Readers receiving a bounded World State snapshot must be able to request the
+// omitted records. This grants no object/check/run mutation capability.
+func (fte *flowToolsExecutor) registerWorldStateQuery(ce *customExecutor) {
+	ws := NewWorldStateTool(fte.flowID, fte.db, worldstate.AgentResearcher)
+	if !ws.IsAvailable() {
+		return
+	}
+	ce.definitions = append(ce.definitions, registryDefinitions[WorldStateQueryToolName])
+	ce.handlers[WorldStateQueryToolName] = ws.Handle
 }
 
 func (fte *flowToolsExecutor) registerWorldStateTools(ce *customExecutor, agent string) {

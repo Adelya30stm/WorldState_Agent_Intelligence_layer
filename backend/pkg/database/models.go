@@ -1282,6 +1282,10 @@ const (
 	WorldStateEventKindEntityUpserted     WorldStateEventKind = "entity_upserted"
 	WorldStateEventKindEntityTransitioned WorldStateEventKind = "entity_transitioned"
 	WorldStateEventKindLinkUpserted       WorldStateEventKind = "link_upserted"
+	WorldStateEventKindObjectUpserted     WorldStateEventKind = "object_upserted"
+	WorldStateEventKindCheckCreated       WorldStateEventKind = "check_created"
+	WorldStateEventKindCheckRunStarted    WorldStateEventKind = "check_run_started"
+	WorldStateEventKindCheckRunUpdated    WorldStateEventKind = "check_run_updated"
 )
 
 func (e *WorldStateEventKind) Scan(src interface{}) error {
@@ -1551,20 +1555,21 @@ type Container struct {
 }
 
 type Flow struct {
-	ID                 int64           `json:"id"`
-	Status             FlowStatus      `json:"status"`
-	Title              string          `json:"title"`
-	Model              string          `json:"model"`
-	ModelProviderName  string          `json:"model_provider_name"`
-	Language           string          `json:"language"`
-	Functions          json.RawMessage `json:"functions"`
-	UserID             int64           `json:"user_id"`
-	CreatedAt          sql.NullTime    `json:"created_at"`
-	UpdatedAt          sql.NullTime    `json:"updated_at"`
-	DeletedAt          sql.NullTime    `json:"deleted_at"`
-	TraceID            sql.NullString  `json:"trace_id"`
-	ModelProviderType  ProviderType    `json:"model_provider_type"`
-	ToolCallIDTemplate string          `json:"tool_call_id_template"`
+	ID                      int64           `json:"id"`
+	Status                  FlowStatus      `json:"status"`
+	Title                   string          `json:"title"`
+	Model                   string          `json:"model"`
+	ModelProviderName       string          `json:"model_provider_name"`
+	Language                string          `json:"language"`
+	Functions               json.RawMessage `json:"functions"`
+	UserID                  int64           `json:"user_id"`
+	CreatedAt               sql.NullTime    `json:"created_at"`
+	UpdatedAt               sql.NullTime    `json:"updated_at"`
+	DeletedAt               sql.NullTime    `json:"deleted_at"`
+	TraceID                 sql.NullString  `json:"trace_id"`
+	ModelProviderType       ProviderType    `json:"model_provider_type"`
+	ToolCallIDTemplate      string          `json:"tool_call_id_template"`
+	WorldStateSchemaVersion int32           `json:"world_state_schema_version"`
 }
 
 type Msgchain struct {
@@ -1745,6 +1750,28 @@ type WorldStateChainCursor struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+type WorldStateCheck struct {
+	ID        int64     `json:"id"`
+	ObjectID  int64     `json:"object_id"`
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type WorldStateCheckRun struct {
+	ID              int64           `json:"id"`
+	CheckID         int64           `json:"check_id"`
+	ToolCallID      sql.NullInt64   `json:"tool_call_id"`
+	RequestKey      sql.NullString  `json:"request_key"`
+	Parameters      json.RawMessage `json:"parameters"`
+	ExecutionStatus string          `json:"execution_status"`
+	Verdict         sql.NullString  `json:"verdict"`
+	Evidence        json.RawMessage `json:"evidence"`
+	CreatedAt       time.Time       `json:"created_at"`
+	StartedAt       sql.NullTime    `json:"started_at"`
+	FinishedAt      sql.NullTime    `json:"finished_at"`
+}
+
 type WorldStateEntity struct {
 	ID          int64               `json:"id"`
 	FlowID      int64               `json:"flow_id"`
@@ -1777,6 +1804,16 @@ type WorldStateLink struct {
 	Type       string          `json:"type"`
 	Properties json.RawMessage `json:"properties"`
 	CreatedAt  time.Time       `json:"created_at"`
+}
+
+type WorldStateObject struct {
+	ID        int64           `json:"id"`
+	FlowID    int64           `json:"flow_id"`
+	ObjectKey string          `json:"object_key"`
+	Type      string          `json:"type"`
+	Locator   json.RawMessage `json:"locator"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 type WorldStateTransition struct {

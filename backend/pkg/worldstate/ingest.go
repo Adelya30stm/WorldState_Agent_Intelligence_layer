@@ -16,6 +16,16 @@ func IngestToolResult(ctx context.Context, db database.Querier, flowID int64, to
 	if db == nil || flowID <= 0 || strings.TrimSpace(result) == "" {
 		return
 	}
+	version, err := ModelVersion(ctx, db, flowID)
+	if err != nil {
+		logrus.WithContext(ctx).WithError(err).WithField("flow_id", flowID).
+			Warn("worldstate: cannot choose ingestion model")
+		return
+	}
+	if version == 2 {
+		ingestModelObjects(ctx, db, flowID, toolName, result)
+		return
+	}
 
 	candidates := ExtractCandidates(toolName, result)
 	if len(candidates) == 0 {
@@ -81,6 +91,24 @@ func IngestToolResult(ctx context.Context, db database.Querier, flowID int64, to
 			"tool": toolName,
 		}); err != nil {
 			logrus.WithContext(ctx).WithError(err).Warn("worldstate: link failed")
+		}
+	}
+}
+
+// Discovery only records object locations. A tool transcript containing words
+// such as XSS or CVE is not a check, a run, or proof of a vulnerability.
+func ingestModelObjects(ctx context.Context, db database.Querier, flowID int64, toolName, result string) {
+	store := NewModelStore(db)
+	for _, candidate := range ExtractObjectCandidates(toolName, result) {
+		_, err := store.ObserveObject(ctx, flowID, AgentExecutor, ObserveObjectInput{
+			Type: candidate.Type, Locator: candidate.Locator,
+		})
+		if err != nil {
+			// Avoid including a raw URL or parameters from untrusted tool output
+			// in logs; the model store redacts the persisted locator.
+			logrus.WithContext(ctx).WithError(err).WithFields(logrus.Fields{
+				"flow_id": flowID, "tool": toolName, "object_type": candidate.Type,
+			}).Warn("worldstate: object discovery failed")
 		}
 	}
 }

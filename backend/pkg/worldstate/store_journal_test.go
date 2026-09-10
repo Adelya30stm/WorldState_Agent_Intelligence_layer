@@ -308,7 +308,7 @@ func newStoreFixture(t *testing.T) storeFixture {
 		db.Close()
 		t.Skipf("store schema unavailable: %v", err)
 	}
-	if err := db.QueryRow(`INSERT INTO flows(model,model_provider_name,model_provider_type,language,tool_call_id_template,user_id) VALUES('m','p','openai','en','',$1) RETURNING id`, f.userID).Scan(&f.flowID); err != nil {
+	if err := db.QueryRow(`INSERT INTO flows(model,model_provider_name,model_provider_type,language,tool_call_id_template,user_id,world_state_schema_version) VALUES('m','p','openai','en','',$1,1) RETURNING id`, f.userID).Scan(&f.flowID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

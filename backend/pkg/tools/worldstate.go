@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,14 @@ func (w *worldStateTool) Handle(ctx context.Context, name string, args json.RawM
 	if !w.IsAvailable() {
 		return "", fmt.Errorf("world state tool is not available")
 	}
+	trimmed := strings.TrimSpace(string(args))
+	if !strings.HasPrefix(trimmed, "{") {
+		return "", fmt.Errorf("world state arguments must be a JSON object")
+	}
+	version, err := worldstate.ModelVersion(ctx, w.db, w.flowID)
+	if err != nil {
+		return "", fmt.Errorf("failed to load world state model version: %w", err)
+	}
 
 	logger := logrus.WithContext(ctx).WithFields(logrus.Fields{
 		"flow_id": w.flowID,
@@ -47,11 +56,22 @@ func (w *worldStateTool) Handle(ctx context.Context, name string, args json.RawM
 		if err := json.Unmarshal(args, &action); err != nil {
 			return "", fmt.Errorf("failed to unmarshal world_state_query args: %w", err)
 		}
+		if version == 2 {
+			return w.queryModel(ctx, action)
+		}
 		return w.query(ctx, action)
 	case WorldStateUpdateToolName:
 		var action WorldStateUpdateAction
-		if err := json.Unmarshal(args, &action); err != nil {
+		if !json.Valid(args) {
+			return "", fmt.Errorf("world_state_update args must be valid JSON")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(args))
+		decoder.UseNumber()
+		if err := decoder.Decode(&action); err != nil {
 			return "", fmt.Errorf("failed to unmarshal world_state_update args: %w", err)
+		}
+		if version == 2 {
+			return w.updateModel(ctx, action)
 		}
 		return w.update(ctx, logger, action)
 	default:
@@ -100,9 +120,10 @@ func (w *worldStateTool) query(ctx context.Context, action WorldStateQueryAction
 	}
 
 	payload, err := json.MarshalIndent(map[string]any{
-		"count":    len(out),
-		"entities": out,
-		"hint":     "Use these entities before choosing the next recon/exploit action to avoid duplicates.",
+		"schema_version": 1,
+		"count":          len(out),
+		"entities":       out,
+		"hint":           "Use these entities before choosing the next recon/exploit action to avoid duplicates.",
 	}, "", "  ")
 	if err != nil {
 		return "", err

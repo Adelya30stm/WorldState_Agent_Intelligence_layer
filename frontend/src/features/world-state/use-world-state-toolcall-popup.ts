@@ -81,13 +81,14 @@ function describe(call: WorldStateToolCall): { description: string; title: strin
     const message = str(args.message);
 
     if (call.name === 'world_state_query') {
-        const filters = [str(args.type), str(args.state)].filter(Boolean).join(' · ');
+        const filters = [str(args.type), str(args.state), str(args.kind), args.object_id ? `object #${args.object_id}` : '', args.check_id ? `check #${args.check_id}` : ''].filter(Boolean).join(' · ');
         let found = '';
 
         try {
-            const parsed = JSON.parse(call.result) as { count?: number };
+            const parsed = JSON.parse(call.result) as { count?: number; schema_version?: number; objects?: unknown[] };
 
-            if (typeof parsed.count === 'number') {found = ` → ${parsed.count} entities`;}
+            if (parsed.schema_version === 2 && Array.isArray(parsed.objects)) {found = ` → ${parsed.objects.length} objects`;}
+            else if (typeof parsed.count === 'number') {found = ` → ${parsed.count} entities`;}
         } catch {
             /* result not JSON — ignore */
         }
@@ -100,6 +101,16 @@ function describe(call: WorldStateToolCall): { description: string; title: strin
     }
 
     // world_state_update
+    const operation = str(args.operation);
+    if (operation) {
+        const operations: Record<string, string> = {
+            observe_object: 'Recorded an object', ensure_check: 'Registered a check',
+            start_run: 'Started a check run', finish_run: 'Recorded a run result',
+        };
+        const target = str(args.object_key) || (args.run_id ? `run #${args.run_id}` : args.check_id ? `check #${args.check_id}` : args.object_id ? `object #${args.object_id}` : '');
+        const description = [message, operations[operation] ?? operation, target, str(args.kind), str(args.execution_status), str(args.verdict)].filter(Boolean).join(' · ');
+        return { description, title: '✏️ world_state_update' };
+    }
     const key = str(args.entity_key);
     const toState = str(args.to_state);
     const transition = [key, toState].filter(Boolean).join(' → ');

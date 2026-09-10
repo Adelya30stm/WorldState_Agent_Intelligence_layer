@@ -709,13 +709,21 @@ func (fp *flowProvider) prepareExecutionContext(ctx context.Context, taskID, sub
 		return "", wrapErrorEndEvaluatorSpan(ctx, evaluator, "failed to summarize execution context", err)
 	}
 
-	if entities, wsErr := fp.db.GetWorldStateEntitiesByFlow(ctx, fp.flowID); wsErr == nil {
-		if snap := worldstate.FormatSnapshot(entities); snap != "" {
-			executionContext = executionContext + "\n\n" + snap
+	version, wsErr := worldstate.ModelVersion(ctx, fp.db, fp.flowID)
+	if wsErr != nil {
+		return "", fmt.Errorf("load World State schema version: %w", wsErr)
+	}
+	// Version 2 is assembled independently for each provider request, never
+	// baked into this persisted/summarizable execution-context string.
+	if version == 1 {
+		if entities, wsErr := fp.db.GetWorldStateEntitiesByFlow(ctx, fp.flowID); wsErr == nil {
+			if snap := worldstate.FormatSnapshot(entities); snap != "" {
+				executionContext = executionContext + "\n\n" + snap
+			}
+		} else {
+			logrus.WithContext(ctx).WithError(wsErr).WithField("flow_id", fp.flowID).
+				Warn("failed to load world state for execution context snapshot")
 		}
-	} else {
-		logrus.WithContext(ctx).WithError(wsErr).WithField("flow_id", fp.flowID).
-			Warn("failed to load world state for execution context snapshot")
 	}
 
 	evaluator.End(

@@ -323,19 +323,21 @@ var registryDefinitions = map[string]llms.FunctionDefinition{
 	},
 	WorldStateQueryToolName: {
 		Name: WorldStateQueryToolName,
-		Description: "Query the authoritative World State entity store for this engagement. " +
-			"Call BEFORE choosing recon/exploit targets to avoid duplicate work. " +
-			"Optional filters: type (host|endpoint|credential|finding) and lifecycle state " +
-			"(unknown|discovered|scanning|assessed|vulnerable|exploited|remediated).",
+		Description: "Query authoritative World State for this flow before choosing the next experiment. " +
+			"Model version 2 returns typed objects, checks and individual runs with computed statuses, parameters and evidence. " +
+			"Filter by object_id, check_id, kind, type or computed state; paginate objects and runs to compare similar experiments. " +
+			"A negative variant does not cancel a confirmed positive run. Model version 1 retains legacy entity/lifecycle output.",
 		Parameters: reflector.Reflect(&WorldStateQueryAction{}),
 	},
 	WorldStateUpdateToolName: {
 		Name: WorldStateUpdateToolName,
-		Description: "Create or update a World State entity after a meaningful observation. " +
-			"Use after discovering hosts/endpoints/credentials/findings or advancing lifecycle. " +
-			"Lifecycle transitions must be valid one-step moves: " +
-			"unknown→discovered→scanning→assessed→vulnerable→exploited→remediated " +
-			"(discovered may skip to assessed; assessed/vulnerable may go to remediated).",
+		Description: "Record World State observations and experiments. Model version 2 requires an operation: " +
+			"observe_object defines what is tested; ensure_check groups a kind such as XSS for that object; " +
+			"start_run records concrete conditions BEFORE an actual terminal/browser experiment and returns run_id; " +
+			"finish_run saves the observed result and evidence for that run_id. This tool records experiments; it does not execute them. " +
+			"Each real repeat needs a new start_run call even with identical parameters; retry finish_run with the same run_id. " +
+			"Do not infer a confirmed vulnerability from a keyword or a reflected payload alone. " +
+			"Legacy model version 1 instead requires entity_key, type and to_state with valid one-step lifecycle transitions.",
 		Parameters: reflector.Reflect(&WorldStateUpdateAction{}),
 	},
 	MemoristToolName: {

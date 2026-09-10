@@ -2,6 +2,7 @@ package worldstate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ const (
 
 // Projection is a compact, planner-facing snapshot of World State.
 type Projection struct {
+	Model             *ModelContext
 	FlowID            int64
 	TotalEntities     int
 	CountsByState     map[State]int
@@ -43,6 +45,21 @@ type TransitionItem struct {
 func BuildProjection(ctx context.Context, db database.Querier, flowID int64) (*Projection, error) {
 	if db == nil || flowID <= 0 {
 		return &Projection{FlowID: flowID, Empty: true, CountsByState: map[State]int{}, CountsByType: map[string]int{}}, nil
+	}
+	version, err := ModelVersion(ctx, db, flowID)
+	if err != nil {
+		return nil, err
+	}
+	if version == 2 {
+		snapshot, err := NewModelStore(db).ReadSnapshot(ctx, flowID)
+		if err != nil {
+			return nil, err
+		}
+		view, err := NewModelContext(snapshot, 32<<10)
+		if err != nil {
+			return nil, err
+		}
+		return &Projection{FlowID: flowID, Model: &view, TotalEntities: len(snapshot.Objects), Empty: len(snapshot.Objects) == 0}, nil
 	}
 
 	entities, err := db.GetWorldStateEntitiesByFlow(ctx, flowID)
@@ -139,6 +156,10 @@ func buildFrontier(entities []database.WorldStateEntity) []FrontierItem {
 
 // Text renders an XML block suitable for planner prompt injection.
 func (p *Projection) Text() string {
+	if p != nil && p.Model != nil {
+		data, _ := json.Marshal(p.Model)
+		return string(data)
+	}
 	if p == nil || p.Empty {
 		return `<world_state status="empty">
   <message>No persisted World State yet. Plan initial reconnaissance to discover hosts/endpoints; state will fill automatically from tool output.</message>

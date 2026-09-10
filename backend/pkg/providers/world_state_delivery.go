@@ -40,6 +40,7 @@ type primaryWorldStateDatabase interface {
 
 type databasePrimaryWorldStateTurnInjector struct {
 	flowID  int64
+	version func(context.Context) (int32, error)
 	builder primaryWorldStateDeliveryBuilder
 	store   primaryWorldStateDeliveryStore
 }
@@ -76,6 +77,7 @@ func newPrimaryWorldStateTurnInjector(db database.Querier, flowID int64) primary
 	}
 	return &databasePrimaryWorldStateTurnInjector{
 		flowID:  flowID,
+		version: func(ctx context.Context) (int32, error) { return worldstate.ModelVersion(ctx, db, flowID) },
 		builder: builder,
 		store:   &databasePrimaryWorldStateDeliveryStore{queries: queries},
 	}
@@ -86,6 +88,15 @@ func (i *databasePrimaryWorldStateTurnInjector) Inject(
 	chainID int64,
 	chain []llms.MessageContent,
 ) ([]llms.MessageContent, bool, error) {
+	if i.version != nil {
+		version, err := i.version(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		if version == 2 {
+			return chain, false, nil
+		}
+	}
 	msgChain, err := i.store.GetMsgChain(ctx, chainID)
 	if err != nil {
 		return nil, false, fmt.Errorf("load World State recipient chain: %w", err)

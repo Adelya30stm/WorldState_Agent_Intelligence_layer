@@ -35,9 +35,9 @@ All subtasks are performed in:
 ## OPTIMIZATION PRINCIPLES
 
 0. **World State First**
-   - When `<world_state>` is present, treat it as the authoritative asset map
-   - Remove or skip planned subtasks that re-do work on entities already past `discovered` without new justification
-   - Prefer refining the plan toward frontier items (discovered / scanning / assessed / vulnerable)
+   - Use the current World State database view rather than stale chat summaries.
+   - For schema_version 2, compare objects → checks → runs, exact conditions and evidence. Plan missing checks or useful new variants; an aggregate vulnerable status does not complete all checks. Intentional repeat experiments are valid.
+   - Omitted details in a bounded snapshot can be retrieved; do not treat them as absent from storage. For legacy lifecycle views only, use frontier items and avoid repeated enumeration without new justification.
 
 1. **Results-Based Adaptation**
    - Thoroughly analyze completed subtask results and outcomes

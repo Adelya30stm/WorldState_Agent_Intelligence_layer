@@ -10,6 +10,7 @@ import { NextStepPanel } from '@/components/NextStepPanel';
 import { AgentStateTimeline } from '@/components/AgentStateTimeline';
 import { StateMachineMap } from '@/components/StateMachineMap';
 import { LifecyclePanel } from '@/components/LifecyclePanel';
+import { CheckModelPanel } from '@/components/CheckModelPanel';
 import { useWorldState } from '@/hooks/useWorldState';
 import { useAgentTransitions, AgentStatus } from '@/hooks/useAgentTransitions';
 import { ExternalLink, GitBranch, Map } from 'lucide-react';
@@ -54,7 +55,7 @@ function WSLogo() {
 function WorkspaceContent() {
     const [flowId, setFlowId] = useState<string | null>(null);
     const [tab, setTab] = useState<Tab>('graph');
-    const { data: wsData, loading: wsLoading, refresh: wsRefresh } = useWorldState(flowId);
+    const { data: wsData, model: wsModel, loading: wsLoading, error: wsError, refresh: wsRefresh } = useWorldState(flowId);
     const { transitions, clear } = useAgentTransitions(flowId);
 
     const entities = wsData?.entities ?? [];
@@ -141,12 +142,12 @@ function WorkspaceContent() {
                     {tab === 'graph' ? (
                         <>
                             <div className="flex-1 min-h-0">
-                                <WorldStateGraph
+                                {wsModel?.schema_version === 1 ? <WorldStateGraph
                                     entities={entities}
                                     links={links}
                                     loading={wsLoading}
                                     onRefresh={wsRefresh}
-                                />
+                                /> : <CheckModelPanel model={wsModel} loading={wsLoading} error={wsError} onRefresh={wsRefresh} />}
                             </div>
                             <div className="shrink-0">
                                 <NextStepPanel flowId={flowId} />
@@ -154,7 +155,7 @@ function WorkspaceContent() {
                         </>
                     ) : tab === 'lifecycle' ? (
                         <div className="flex-1 min-h-0">
-                            <LifecyclePanel flowId={flowId} />
+                            {wsModel?.schema_version === 1 ? <LifecyclePanel key={flowId} flowId={flowId} /> : <CheckModelPanel model={wsModel} loading={wsLoading} error={wsError} onRefresh={wsRefresh} />}
                         </div>
                     ) : (
                         <>
