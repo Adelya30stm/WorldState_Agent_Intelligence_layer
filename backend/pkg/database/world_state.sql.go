@@ -291,6 +291,247 @@ func (q *Queries) GetWorldStateTransitionsByFlow(ctx context.Context, arg GetWor
 	return items, nil
 }
 
+const insertWorldStateEntity = `-- name: InsertWorldStateEntity :one
+INSERT INTO world_state_entities (
+  flow_id,
+  entity_key,
+  type,
+  state,
+  properties,
+  annotations
+) VALUES (
+  $1, $2, $3, $4, $5, $6
+)
+ON CONFLICT (flow_id, entity_key) DO NOTHING
+RETURNING id, flow_id, entity_key, type, state, properties, annotations, version, created_at, updated_at
+`
+
+type InsertWorldStateEntityParams struct {
+	FlowID      int64               `json:"flow_id"`
+	EntityKey   string              `json:"entity_key"`
+	Type        string              `json:"type"`
+	State       WorldStateLifecycle `json:"state"`
+	Properties  json.RawMessage     `json:"properties"`
+	Annotations json.RawMessage     `json:"annotations"`
+}
+
+func (q *Queries) InsertWorldStateEntity(ctx context.Context, arg InsertWorldStateEntityParams) (WorldStateEntity, error) {
+	row := q.db.QueryRowContext(ctx, insertWorldStateEntity,
+		arg.FlowID,
+		arg.EntityKey,
+		arg.Type,
+		arg.State,
+		arg.Properties,
+		arg.Annotations,
+	)
+	var i WorldStateEntity
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.EntityKey,
+		&i.Type,
+		&i.State,
+		&i.Properties,
+		&i.Annotations,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertWorldStateLink = `-- name: InsertWorldStateLink :one
+INSERT INTO world_state_links (
+  flow_id,
+  source_id,
+  target_id,
+  type,
+  properties
+) VALUES (
+  $1, $2, $3, $4, $5
+)
+ON CONFLICT (flow_id, source_id, target_id, type) DO NOTHING
+RETURNING id, flow_id, source_id, target_id, type, properties, created_at
+`
+
+type InsertWorldStateLinkParams struct {
+	FlowID     int64           `json:"flow_id"`
+	SourceID   int64           `json:"source_id"`
+	TargetID   int64           `json:"target_id"`
+	Type       string          `json:"type"`
+	Properties json.RawMessage `json:"properties"`
+}
+
+func (q *Queries) InsertWorldStateLink(ctx context.Context, arg InsertWorldStateLinkParams) (WorldStateLink, error) {
+	row := q.db.QueryRowContext(ctx, insertWorldStateLink,
+		arg.FlowID,
+		arg.SourceID,
+		arg.TargetID,
+		arg.Type,
+		arg.Properties,
+	)
+	var i WorldStateLink
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.SourceID,
+		&i.TargetID,
+		&i.Type,
+		&i.Properties,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const lockWorldStateEntityByID = `-- name: LockWorldStateEntityByID :one
+SELECT id, flow_id, entity_key, type, state, properties, annotations, version, created_at, updated_at
+FROM world_state_entities
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockWorldStateEntityByID(ctx context.Context, id int64) (WorldStateEntity, error) {
+	row := q.db.QueryRowContext(ctx, lockWorldStateEntityByID, id)
+	var i WorldStateEntity
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.EntityKey,
+		&i.Type,
+		&i.State,
+		&i.Properties,
+		&i.Annotations,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lockWorldStateEntityByKey = `-- name: LockWorldStateEntityByKey :one
+SELECT id, flow_id, entity_key, type, state, properties, annotations, version, created_at, updated_at
+FROM world_state_entities
+WHERE flow_id = $1 AND entity_key = $2
+FOR UPDATE
+`
+
+type LockWorldStateEntityByKeyParams struct {
+	FlowID    int64  `json:"flow_id"`
+	EntityKey string `json:"entity_key"`
+}
+
+func (q *Queries) LockWorldStateEntityByKey(ctx context.Context, arg LockWorldStateEntityByKeyParams) (WorldStateEntity, error) {
+	row := q.db.QueryRowContext(ctx, lockWorldStateEntityByKey, arg.FlowID, arg.EntityKey)
+	var i WorldStateEntity
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.EntityKey,
+		&i.Type,
+		&i.State,
+		&i.Properties,
+		&i.Annotations,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lockWorldStateLink = `-- name: LockWorldStateLink :one
+SELECT id, flow_id, source_id, target_id, type, properties, created_at
+FROM world_state_links
+WHERE flow_id = $1 AND source_id = $2 AND target_id = $3 AND type = $4
+FOR UPDATE
+`
+
+type LockWorldStateLinkParams struct {
+	FlowID   int64  `json:"flow_id"`
+	SourceID int64  `json:"source_id"`
+	TargetID int64  `json:"target_id"`
+	Type     string `json:"type"`
+}
+
+func (q *Queries) LockWorldStateLink(ctx context.Context, arg LockWorldStateLinkParams) (WorldStateLink, error) {
+	row := q.db.QueryRowContext(ctx, lockWorldStateLink,
+		arg.FlowID,
+		arg.SourceID,
+		arg.TargetID,
+		arg.Type,
+	)
+	var i WorldStateLink
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.SourceID,
+		&i.TargetID,
+		&i.Type,
+		&i.Properties,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const mergeWorldStateEntityProperties = `-- name: MergeWorldStateEntityProperties :one
+UPDATE world_state_entities
+SET
+  properties = properties || $1::jsonb,
+  updated_at = CURRENT_TIMESTAMP,
+  version = version + 1
+WHERE id = $2
+RETURNING id, flow_id, entity_key, type, state, properties, annotations, version, created_at, updated_at
+`
+
+type MergeWorldStateEntityPropertiesParams struct {
+	Properties json.RawMessage `json:"properties"`
+	ID         int64           `json:"id"`
+}
+
+func (q *Queries) MergeWorldStateEntityProperties(ctx context.Context, arg MergeWorldStateEntityPropertiesParams) (WorldStateEntity, error) {
+	row := q.db.QueryRowContext(ctx, mergeWorldStateEntityProperties, arg.Properties, arg.ID)
+	var i WorldStateEntity
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.EntityKey,
+		&i.Type,
+		&i.State,
+		&i.Properties,
+		&i.Annotations,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const mergeWorldStateLinkProperties = `-- name: MergeWorldStateLinkProperties :one
+UPDATE world_state_links
+SET properties = properties || $1::jsonb
+WHERE id = $2
+RETURNING id, flow_id, source_id, target_id, type, properties, created_at
+`
+
+type MergeWorldStateLinkPropertiesParams struct {
+	Properties json.RawMessage `json:"properties"`
+	ID         int64           `json:"id"`
+}
+
+func (q *Queries) MergeWorldStateLinkProperties(ctx context.Context, arg MergeWorldStateLinkPropertiesParams) (WorldStateLink, error) {
+	row := q.db.QueryRowContext(ctx, mergeWorldStateLinkProperties, arg.Properties, arg.ID)
+	var i WorldStateLink
+	err := row.Scan(
+		&i.ID,
+		&i.FlowID,
+		&i.SourceID,
+		&i.TargetID,
+		&i.Type,
+		&i.Properties,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const updateWorldStateEntityState = `-- name: UpdateWorldStateEntityState :one
 UPDATE world_state_entities
 SET
@@ -320,106 +561,6 @@ func (q *Queries) UpdateWorldStateEntityState(ctx context.Context, arg UpdateWor
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertWorldStateEntity = `-- name: UpsertWorldStateEntity :one
-INSERT INTO world_state_entities (
-  flow_id,
-  entity_key,
-  type,
-  state,
-  properties,
-  annotations
-) VALUES (
-  $1, $2, $3, $4, $5, $6
-)
-ON CONFLICT (flow_id, entity_key) DO UPDATE SET
-  properties = world_state_entities.properties || EXCLUDED.properties,
-  annotations = CASE
-    WHEN EXCLUDED.annotations = '[]'::jsonb THEN world_state_entities.annotations
-    ELSE EXCLUDED.annotations
-  END,
-  updated_at = CURRENT_TIMESTAMP,
-  version = world_state_entities.version + 1
-RETURNING id, flow_id, entity_key, type, state, properties, annotations, version, created_at, updated_at
-`
-
-type UpsertWorldStateEntityParams struct {
-	FlowID      int64               `json:"flow_id"`
-	EntityKey   string              `json:"entity_key"`
-	Type        string              `json:"type"`
-	State       WorldStateLifecycle `json:"state"`
-	Properties  json.RawMessage     `json:"properties"`
-	Annotations json.RawMessage     `json:"annotations"`
-}
-
-func (q *Queries) UpsertWorldStateEntity(ctx context.Context, arg UpsertWorldStateEntityParams) (WorldStateEntity, error) {
-	row := q.db.QueryRowContext(ctx, upsertWorldStateEntity,
-		arg.FlowID,
-		arg.EntityKey,
-		arg.Type,
-		arg.State,
-		arg.Properties,
-		arg.Annotations,
-	)
-	var i WorldStateEntity
-	err := row.Scan(
-		&i.ID,
-		&i.FlowID,
-		&i.EntityKey,
-		&i.Type,
-		&i.State,
-		&i.Properties,
-		&i.Annotations,
-		&i.Version,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertWorldStateLink = `-- name: UpsertWorldStateLink :one
-INSERT INTO world_state_links (
-  flow_id,
-  source_id,
-  target_id,
-  type,
-  properties
-) VALUES (
-  $1, $2, $3, $4, $5
-)
-ON CONFLICT (flow_id, source_id, target_id, type) DO UPDATE SET
-  properties = world_state_links.properties || EXCLUDED.properties
-RETURNING id, flow_id, source_id, target_id, type, properties, created_at
-`
-
-type UpsertWorldStateLinkParams struct {
-	FlowID     int64           `json:"flow_id"`
-	SourceID   int64           `json:"source_id"`
-	TargetID   int64           `json:"target_id"`
-	Type       string          `json:"type"`
-	Properties json.RawMessage `json:"properties"`
-}
-
-func (q *Queries) UpsertWorldStateLink(ctx context.Context, arg UpsertWorldStateLinkParams) (WorldStateLink, error) {
-	row := q.db.QueryRowContext(ctx, upsertWorldStateLink,
-		arg.FlowID,
-		arg.SourceID,
-		arg.TargetID,
-		arg.Type,
-		arg.Properties,
-	)
-	var i WorldStateLink
-	err := row.Scan(
-		&i.ID,
-		&i.FlowID,
-		&i.SourceID,
-		&i.TargetID,
-		&i.Type,
-		&i.Properties,
-		&i.CreatedAt,
 	)
 	return i, err
 }

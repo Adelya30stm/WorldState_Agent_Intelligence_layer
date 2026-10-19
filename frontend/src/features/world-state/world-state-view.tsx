@@ -11,6 +11,8 @@ import WorldStateDetailsPanel from './world-state-details-panel';
 import WorldStateGraph from './world-state-graph';
 import WorldStateSidebar from './world-state-sidebar';
 import { LifecycleStrip } from './lifecycle-strip';
+import { useWorldStateModel } from './use-world-state-model';
+import { WorldStateModelView } from './world-state-model-view';
 
 // ─── Mode icons ───────────────────────────────────────────────────────────────
 
@@ -199,7 +201,7 @@ interface WorldStateViewProps {
     onBack?: () => void;
 }
 
-const WorldStateView = ({ onBack }: WorldStateViewProps) => {
+const LegacyWorldStateView = ({ onBack }: WorldStateViewProps) => {
     const worldState = useWorldState();
     const { flowId } = useFlow();
 
@@ -220,6 +222,20 @@ const WorldStateView = ({ onBack }: WorldStateViewProps) => {
             worldState={worldState}
         />
     );
+};
+
+const WorldStateView = ({ onBack }: WorldStateViewProps) => {
+    const { flowId } = useFlow();
+    const { data, error, loading, refresh } = useWorldStateModel(flowId);
+    if (!data) {
+        return <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-sm text-muted-foreground">
+            <p role={error ? 'alert' : 'status'}>{error ?? (flowId ? 'Loading World State…' : 'Select a flow to see World State.')}</p>
+            {error && <Button onClick={refresh} variant="outline">Retry</Button>}
+            {onBack && <Button onClick={onBack} variant="outline">← Back</Button>}
+        </div>;
+    }
+    if (data.schema_version === 1) return <LegacyWorldStateView key={flowId} onBack={onBack} />;
+    return <WorldStateModelView key={flowId} model={data} error={error} loading={loading} onRefresh={refresh} onBack={onBack} />;
 };
 
 export default WorldStateView;

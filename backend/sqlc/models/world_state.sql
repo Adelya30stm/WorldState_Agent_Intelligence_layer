@@ -8,6 +8,18 @@ SELECT *
 FROM world_state_entities
 WHERE flow_id = $1 AND entity_key = $2;
 
+-- name: LockWorldStateEntityByID :one
+SELECT *
+FROM world_state_entities
+WHERE id = $1
+FOR UPDATE;
+
+-- name: LockWorldStateEntityByKey :one
+SELECT *
+FROM world_state_entities
+WHERE flow_id = $1 AND entity_key = $2
+FOR UPDATE;
+
 -- name: GetWorldStateEntitiesByFlow :many
 SELECT *
 FROM world_state_entities
@@ -43,7 +55,7 @@ FROM world_state_transitions
 WHERE entity_id = $1
 ORDER BY created_at ASC;
 
--- name: UpsertWorldStateEntity :one
+-- name: InsertWorldStateEntity :one
 INSERT INTO world_state_entities (
   flow_id,
   entity_key,
@@ -54,14 +66,16 @@ INSERT INTO world_state_entities (
 ) VALUES (
   $1, $2, $3, $4, $5, $6
 )
-ON CONFLICT (flow_id, entity_key) DO UPDATE SET
-  properties = world_state_entities.properties || EXCLUDED.properties,
-  annotations = CASE
-    WHEN EXCLUDED.annotations = '[]'::jsonb THEN world_state_entities.annotations
-    ELSE EXCLUDED.annotations
-  END,
+ON CONFLICT (flow_id, entity_key) DO NOTHING
+RETURNING *;
+
+-- name: MergeWorldStateEntityProperties :one
+UPDATE world_state_entities
+SET
+  properties = properties || sqlc.arg(properties)::jsonb,
   updated_at = CURRENT_TIMESTAMP,
-  version = world_state_entities.version + 1
+  version = version + 1
+WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: UpdateWorldStateEntityState :one
@@ -85,7 +99,13 @@ INSERT INTO world_state_transitions (
 )
 RETURNING *;
 
--- name: UpsertWorldStateLink :one
+-- name: LockWorldStateLink :one
+SELECT *
+FROM world_state_links
+WHERE flow_id = $1 AND source_id = $2 AND target_id = $3 AND type = $4
+FOR UPDATE;
+
+-- name: InsertWorldStateLink :one
 INSERT INTO world_state_links (
   flow_id,
   source_id,
@@ -95,6 +115,11 @@ INSERT INTO world_state_links (
 ) VALUES (
   $1, $2, $3, $4, $5
 )
-ON CONFLICT (flow_id, source_id, target_id, type) DO UPDATE SET
-  properties = world_state_links.properties || EXCLUDED.properties
+ON CONFLICT (flow_id, source_id, target_id, type) DO NOTHING
+RETURNING *;
+
+-- name: MergeWorldStateLinkProperties :one
+UPDATE world_state_links
+SET properties = properties || sqlc.arg(properties)::jsonb
+WHERE id = sqlc.arg(id)
 RETURNING *;

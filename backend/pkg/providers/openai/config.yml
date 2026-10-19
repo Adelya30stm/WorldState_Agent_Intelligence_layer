@@ -21,27 +21,29 @@ simple_json:
     output: 1.25
     cache_read: 0.02
 
+# MUST be identical for World State ON and OFF.
+# gpt-5.4-mini rejects function tools + reasoning_effort on /v1/chat/completions.
 primary_agent:
-  model: o4-mini
+  model: gpt-5.4-mini
   n: 1
   max_tokens: 16384
   reasoning:
-    effort: medium
+    effort: none
   price:
-    input: 1.1
-    output: 4.4
-    cache_read: 0.275
+    input: 0.75
+    output: 4.5
+    cache_read: 0.075
 
 assistant:
-  model: o4-mini
+  model: gpt-5.4-mini
   n: 1
   max_tokens: 16384
   reasoning:
-    effort: medium
+    effort: none
   price:
-    input: 1.1
-    output: 4.4
-    cache_read: 0.275
+    input: 0.75
+    output: 4.5
+    cache_read: 0.075
 
 generator:
   model: o3

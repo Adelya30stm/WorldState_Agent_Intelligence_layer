@@ -21,6 +21,7 @@ import (
 	"pentagi/pkg/providers/provider"
 	"pentagi/pkg/templates"
 	"pentagi/pkg/tools"
+	"pentagi/pkg/worldstate"
 
 	"github.com/sirupsen/logrus"
 )
@@ -40,6 +41,7 @@ type FlowWorker interface {
 	ListAssistants(ctx context.Context) []AssistantWorker
 	ListTasks(ctx context.Context) []TaskWorker
 	PutInput(ctx context.Context, input string) error
+	ResumePrimaryWait(ctx context.Context, wait database.AgentChainWait) error
 	Finish(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Rename(ctx context.Context, title string) error
@@ -103,8 +105,9 @@ type flowProviderWorkers struct {
 const flowInputTimeout = 1 * time.Second
 
 type flowInput struct {
-	input string
-	done  chan error
+	input      string
+	resumeWait database.AgentChainWait
+	done       chan error
 }
 
 func NewFlowWorker(
@@ -137,6 +140,12 @@ func NewFlowWorker(
 		"provider_type": fwc.prvtype.String(),
 	})
 	logger.Info("flow created in DB")
+
+	if scope := worldstate.ParseScopeFromInput(fwc.input); !scope.Empty() {
+		if err := worldstate.SaveScope(ctx, fwc.db, flow.ID, scope); err != nil {
+			logger.WithError(err).Warn("failed to persist world state scope")
+		}
+	}
 
 	user, err := fwc.db.GetUser(ctx, fwc.userID)
 	if err != nil {
@@ -594,6 +603,25 @@ func (fw *flowWorker) PutInput(ctx context.Context, input string) error {
 	}
 }
 
+func (fw *flowWorker) ResumePrimaryWait(ctx context.Context, wait database.AgentChainWait) error {
+	flin := flowInput{resumeWait: wait, done: make(chan error, 1)}
+	select {
+	case <-fw.ctx.Done():
+		return fmt.Errorf("flow %d stopped: %w", fw.flowCtx.FlowID, fw.ctx.Err())
+	case <-ctx.Done():
+		return ctx.Err()
+	case fw.input <- flin:
+		select {
+		case err := <-flin.done:
+			return err
+		case <-fw.ctx.Done():
+			return fmt.Errorf("flow %d stopped: %w", fw.flowCtx.FlowID, fw.ctx.Err())
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func (fw *flowWorker) Finish(ctx context.Context) error {
 	ctx, span := obs.Observer.NewSpan(ctx, obs.SpanKindInternal, "controller.flowWorker.Finish")
 	defer span.End()
@@ -733,7 +761,14 @@ func (fw *flowWorker) worker() {
 
 	// process user input in regular job
 	for flin := range fw.input {
-		if task, err := fw.processInput(flin); err != nil {
+		var task TaskWorker
+		var err error
+		if flin.resumeWait.MsgchainID != 0 {
+			task, err = fw.processPrimaryWaitResume(flin)
+		} else {
+			task, err = fw.processInput(flin)
+		}
+		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				getLogger(flin.input, task).Info("flow are going to be stopped by user")
 				return
@@ -747,6 +782,30 @@ func (fw *flowWorker) worker() {
 			getLogger(flin.input, task).Info("user input processed")
 		}
 	}
+}
+
+func (fw *flowWorker) processPrimaryWaitResume(flin flowInput) (TaskWorker, error) {
+	for _, task := range fw.tc.ListTasks(fw.ctx) {
+		resumed, err := task.ResumePrimaryWait(fw.ctx, flin.resumeWait)
+		if err != nil {
+			flin.done <- err
+			return task, err
+		}
+		if resumed {
+			flin.done <- nil
+			err = fw.runTask("resume task after World State change", "world_state", task)
+			if err != nil {
+				wait, waitErr := fw.flowCtx.DB.GetAgentChainWait(fw.ctx, flin.resumeWait.MsgchainID)
+				if waitErr == nil && wait.ResumePending {
+					task.RestorePrimaryWait(flin.resumeWait.MsgchainID)
+				}
+			}
+			return task, err
+		}
+	}
+	err := fmt.Errorf("primary wait message chain %d is not resumable", flin.resumeWait.MsgchainID)
+	flin.done <- err
+	return nil, err
 }
 
 func (fw *flowWorker) processInput(flin flowInput) (TaskWorker, error) {

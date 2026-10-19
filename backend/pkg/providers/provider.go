@@ -153,9 +153,11 @@ type flowProvider struct {
 
 	summarizer csum.Summarizer
 
-	maxGACallsLimit int
-	maxLACallsLimit int
-	buildMonitor    executionMonitorBuilder
+	maxGACallsLimit   int
+	maxLACallsLimit   int
+	buildMonitor      executionMonitorBuilder
+	worldState        primaryWorldStateTurnInjector
+	requestWorldState worldStateRequestContext
 
 	provider.Provider
 }
@@ -710,24 +712,24 @@ func (fp *flowProvider) PrepareAgentChain(ctx context.Context, taskID, subtaskID
 	}
 
 	systemAgentTmpl, err := fp.prompter.RenderTemplate(templates.PromptTypePrimaryAgent, map[string]any{
-		"FinalyToolName":            tools.FinalyToolName,
-		"SearchToolName":            tools.SearchToolName,
-		"PentesterToolName":         tools.PentesterToolName,
-		"CoderToolName":             tools.CoderToolName,
-		"AdviceToolName":            tools.AdviceToolName,
-		"MemoristToolName":          tools.MemoristToolName,
-		"MaintenanceToolName":       tools.MaintenanceToolName,
-		"WorldStateQueryToolName":   tools.WorldStateQueryToolName,
-		"WorldStateUpdateToolName":  tools.WorldStateUpdateToolName,
-		"SummarizationToolName":     cast.SummarizationToolName,
-		"SummarizedContentPrefix":   strings.ReplaceAll(csum.SummarizedContentPrefix, "\n", "\\n"),
-		"AskUserToolName":           tools.AskUserToolName,
-		"AskUserEnabled":            fp.askUser,
-		"ExecutionContext":          executionContext,
-		"Lang":                      fp.language,
-		"DockerImage":               fp.image,
-		"CurrentTime":               getCurrentTime(),
-		"ToolPlaceholder":           ToolPlaceholder,
+		"FinalyToolName":           tools.FinalyToolName,
+		"SearchToolName":           tools.SearchToolName,
+		"PentesterToolName":        tools.PentesterToolName,
+		"CoderToolName":            tools.CoderToolName,
+		"AdviceToolName":           tools.AdviceToolName,
+		"MemoristToolName":         tools.MemoristToolName,
+		"MaintenanceToolName":      tools.MaintenanceToolName,
+		"WorldStateQueryToolName":  tools.WorldStateQueryToolName,
+		"WorldStateUpdateToolName": tools.WorldStateUpdateToolName,
+		"SummarizationToolName":    cast.SummarizationToolName,
+		"SummarizedContentPrefix":  strings.ReplaceAll(csum.SummarizedContentPrefix, "\n", "\\n"),
+		"AskUserToolName":          tools.AskUserToolName,
+		"AskUserEnabled":           fp.askUser,
+		"ExecutionContext":         executionContext,
+		"Lang":                     fp.language,
+		"DockerImage":              fp.image,
+		"CurrentTime":              getCurrentTime(),
+		"ToolPlaceholder":          ToolPlaceholder,
 	})
 	if err != nil {
 		logger.WithError(err).Error("failed to get system prompt for primary agent template")
@@ -875,6 +877,16 @@ func (fp *flowProvider) PerformAgentChain(ctx context.Context, taskID, subtaskID
 						langfuse.WithAgentLevel(langfuse.ObservationLevelWarning),
 					)
 				} else {
+					version, vErr := worldstate.ModelVersion(ctx, fp.db, fp.flowID)
+					if vErr != nil {
+						loggerFunc.WithError(vErr).Warn("world state done guard skipped: version load failed")
+					} else if version != 2 {
+						if entities, wsErr := fp.db.GetWorldStateEntitiesByFlow(ctx, fp.flowID); wsErr != nil {
+							loggerFunc.WithError(wsErr).Warn("world state done guard skipped: load failed")
+						} else if guardErr := worldstate.ErrIncompleteWorldState(entities); guardErr != nil {
+							return "", guardErr
+						}
+					}
 					performResult = PerformResultDone
 					opts = append(opts,
 						langfuse.WithAgentStatus("done handler: success"),
@@ -973,6 +985,15 @@ func (fp *flowProvider) PutInputToAgentChain(ctx context.Context, msgChainID int
 		"msg_chain_id": msgChainID,
 		"input":        input[:min(len(input), 1000)],
 	})
+	if db, ok := fp.db.(worldstate.TransactionDB); ok {
+		handled, err := worldstate.ResolvePrimaryWaitWithUser(ctx, db, msgChainID, input)
+		if err != nil {
+			return fmt.Errorf("failed to resolve primary ask wait: %w", err)
+		}
+		if handled {
+			return nil
+		}
+	}
 
 	return fp.processChain(ctx, msgChainID, logger, func(chain []llms.MessageContent) ([]llms.MessageContent, error) {
 		return fp.updateMsgChainResult(chain, tools.AskUserToolName, input)
@@ -1034,6 +1055,16 @@ func (fp *flowProvider) updateMsgLogResult(
 // worldStateProjection returns a compact XML snapshot for planner prompts.
 // Failures are soft — empty/unavailable state must not block planning.
 func (fp *flowProvider) worldStateProjection(ctx context.Context) string {
+	version, err := worldstate.ModelVersion(ctx, fp.db, fp.flowID)
+	if err != nil {
+		logrus.WithContext(ctx).WithError(err).Warn("failed to load World State schema for planner")
+		return ""
+	}
+	// Generator/refiner templates become persisted messages. New flows receive
+	// their snapshot separately at callWithRetries, just like other agent turns.
+	if version == 2 {
+		return ""
+	}
 	proj, err := worldstate.BuildProjection(ctx, fp.db, fp.flowID)
 	if err != nil {
 		logrus.WithContext(ctx).WithError(err).WithField("flow_id", fp.flowID).

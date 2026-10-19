@@ -37,6 +37,8 @@ type TaskWorker interface {
 	GetResult(ctx context.Context) (string, error)
 	SetResult(ctx context.Context, result string) error
 	PutInput(ctx context.Context, input string) error
+	ResumePrimaryWait(ctx context.Context, wait database.AgentChainWait) (bool, error)
+	RestorePrimaryWait(msgchainID int64)
 	Run(ctx context.Context) error
 	Finish(ctx context.Context) error
 }
@@ -285,6 +287,36 @@ func (tw *taskWorker) PutInput(ctx context.Context, input string) error {
 	}
 
 	return nil
+}
+
+func (tw *taskWorker) ResumePrimaryWait(ctx context.Context, wait database.AgentChainWait) (bool, error) {
+	if tw.IsCompleted() || !tw.IsWaiting() {
+		return false, nil
+	}
+	for _, st := range tw.stc.ListSubtasks(ctx) {
+		resumed, err := st.ResumePrimaryWait(ctx, wait)
+		if err != nil {
+			return false, err
+		}
+		if resumed {
+			tw.mx.Lock()
+			tw.waiting = false
+			tw.mx.Unlock()
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (tw *taskWorker) RestorePrimaryWait(msgchainID int64) {
+	for _, st := range tw.stc.ListSubtasks(context.Background()) {
+		if st.RestorePrimaryWait(msgchainID) {
+			tw.mx.Lock()
+			tw.waiting = true
+			tw.mx.Unlock()
+			return
+		}
+	}
 }
 
 func (tw *taskWorker) Run(ctx context.Context) error {

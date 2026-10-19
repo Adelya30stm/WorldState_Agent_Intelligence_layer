@@ -16,6 +16,7 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import FlowCentralTabs from '@/features/flows/flow-central-tabs';
 import FlowTabs from '@/features/flows/flow-tabs';
+import { ScopeConfirmDialog } from '@/features/world-state/scope-confirm-dialog';
 import { useWorldStateToolCallPopup } from '@/features/world-state/use-world-state-toolcall-popup';
 import WorldStateView from '@/features/world-state/world-state-view';
 import { usePutUserInputMutation } from '@/graphql/types';
@@ -173,9 +174,32 @@ const Flow = () => {
     }, [flowId, searchParams, setSearchParams, putUserInput]);
 
     const [activeTabsTab, setActiveTabsTab] = useState<string>(!isDesktop ? 'automation' : 'terminal');
-    const [leftTab, setLeftTab] = useState<string>('automation');
+    const [leftTab, setLeftTab] = useState<string>(() => {
+        const tab = searchParams.get('tab');
+        if (tab === 'assistant' || tab === 'world-state' || tab === 'automation') {
+            return tab;
+        }
+        return 'automation';
+    });
 
     const isWorldState = isDesktop && leftTab === 'world-state';
+    const confirmScope = searchParams.get('confirmScope') === '1';
+
+    const clearConfirmScope = () => {
+        setSearchParams(
+            (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete('confirmScope');
+                return next;
+            },
+            { replace: true },
+        );
+    };
+
+    const scopeDialog =
+        flowId != null ? (
+            <ScopeConfirmDialog flowId={flowId} onClose={clearConfirmScope} open={confirmScope} />
+        ) : null;
 
     const tabsCard = (
         <div className="flex h-[calc(100dvh-3rem)] max-w-full flex-col rounded-none border-0">
@@ -222,6 +246,7 @@ const Flow = () => {
         return (
             <>
                 {header}
+                {scopeDialog}
                 <div className="relative flex h-[calc(100dvh-3rem)] w-full max-w-full flex-1">
                     {isFlowLoading && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/50">
@@ -260,6 +285,7 @@ const Flow = () => {
     return (
         <>
             {header}
+            {scopeDialog}
             <div className="relative flex h-[calc(100dvh-3rem)] w-full max-w-full flex-1">
                 {isFlowLoading && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/50">

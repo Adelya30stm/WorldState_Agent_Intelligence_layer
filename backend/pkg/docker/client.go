@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -37,6 +38,12 @@ const (
 	containerLocalCwdTemplate   = "flow-%d"
 	containerPortsNumber        = 2
 	limitContainerPortsNumber   = 2000
+	primaryTerminalNamePrefix   = "redscope-terminal-"
+)
+
+var (
+	allocatedPortsMu sync.Mutex
+	allocatedPorts   = map[int64][]int{}
 )
 
 type dockerClient struct {
@@ -67,13 +74,83 @@ type DockerClient interface {
 	GetDefaultImage() string
 }
 
-func GetPrimaryContainerPorts(flowID int64) []int {
+func defaultPrimaryContainerPorts(flowID int64) []int {
 	ports := make([]int, containerPortsNumber)
 	for i := 0; i < containerPortsNumber; i++ {
 		delta := (int(flowID)*containerPortsNumber + i) % limitContainerPortsNumber
 		ports[i] = BaseContainerPortsNumber + delta
 	}
 	return ports
+}
+
+func GetPrimaryContainerPorts(flowID int64) []int {
+	allocatedPortsMu.Lock()
+	defer allocatedPortsMu.Unlock()
+	if ports := allocatedPorts[flowID]; len(ports) == containerPortsNumber {
+		return slices.Clone(ports)
+	}
+	return defaultPrimaryContainerPorts(flowID)
+}
+
+func registerAllocatedPorts(flowID int64, ports []int) {
+	if flowID < 0 || len(ports) != containerPortsNumber {
+		return
+	}
+	allocatedPortsMu.Lock()
+	defer allocatedPortsMu.Unlock()
+	allocatedPorts[flowID] = slices.Clone(ports)
+}
+
+func portsAvailable(ports []int, used map[int]struct{}) bool {
+	for _, port := range ports {
+		if _, busy := used[port]; busy {
+			return false
+		}
+	}
+	return true
+}
+
+func choosePrimaryContainerPorts(flowID int64, used map[int]struct{}) []int {
+	allocatedPortsMu.Lock()
+	cached := slices.Clone(allocatedPorts[flowID])
+	allocatedPortsMu.Unlock()
+	if len(cached) == containerPortsNumber && portsAvailable(cached, used) {
+		return cached
+	}
+
+	preferred := defaultPrimaryContainerPorts(flowID)
+	startDelta := preferred[0] - BaseContainerPortsNumber
+	for offset := 0; offset < limitContainerPortsNumber; offset += containerPortsNumber {
+		p0 := BaseContainerPortsNumber + (startDelta+offset)%limitContainerPortsNumber
+		p1 := p0 + 1
+		ports := []int{p0, p1}
+		if !portsAvailable(ports, used) {
+			continue
+		}
+		registerAllocatedPorts(flowID, ports)
+		return ports
+	}
+
+	registerAllocatedPorts(flowID, preferred)
+	return preferred
+}
+
+func primaryTerminalFlowID(name string) (int64, bool) {
+	name = strings.TrimPrefix(name, "/")
+	// Longer legacy prefix first so pentagi-pentagi-terminal-N is not skipped.
+	// pentagi-terminal-N belongs to the other local PentAGI instance and must
+	// not hydrate this process's port cache.
+	for _, prefix := range []string{"pentagi-pentagi-terminal-", primaryTerminalNamePrefix} {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(name, prefix), 10, 64)
+		if err != nil || id < 0 {
+			return 0, false
+		}
+		return id, true
+	}
+	return 0, false
 }
 
 func NewDockerClient(ctx context.Context, db database.Querier, cfg *config.Config) (DockerClient, error) {
@@ -137,7 +214,7 @@ func NewDockerClient(ctx context.Context, db database.Querier, cfg *config.Confi
 		"public_ip":      publicIP,
 	}).Debug("Docker client initialized")
 
-	return &dockerClient{
+	dc := &dockerClient{
 		db:       db,
 		client:   cli,
 		dataDir:  dataDir,
@@ -148,7 +225,62 @@ func NewDockerClient(ctx context.Context, db database.Querier, cfg *config.Confi
 		socket:   socket,
 		network:  netName,
 		publicIP: publicIP,
-	}, nil
+	}
+	dc.hydrateAllocatedPorts(ctx)
+	return dc, nil
+}
+
+func (dc *dockerClient) usedHostPorts(ctx context.Context) map[int]struct{} {
+	used := make(map[int]struct{})
+	if dc == nil || dc.client == nil {
+		return used
+	}
+	list, err := dc.client.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return used
+	}
+	for _, c := range list {
+		for _, p := range c.Ports {
+			if p.PublicPort != 0 {
+				used[int(p.PublicPort)] = struct{}{}
+			}
+		}
+	}
+	return used
+}
+
+func (dc *dockerClient) hydrateAllocatedPorts(ctx context.Context) {
+	if dc == nil || dc.client == nil {
+		return
+	}
+	list, err := dc.client.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return
+	}
+	for _, c := range list {
+		var flowID int64
+		var ok bool
+		for _, name := range c.Names {
+			flowID, ok = primaryTerminalFlowID(name)
+			if ok {
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		ports := make([]int, 0, containerPortsNumber)
+		for _, p := range c.Ports {
+			if p.PublicPort != 0 {
+				ports = append(ports, int(p.PublicPort))
+			}
+		}
+		slices.Sort(ports)
+		ports = slices.Compact(ports)
+		if len(ports) >= containerPortsNumber {
+			registerAllocatedPorts(flowID, ports[:containerPortsNumber])
+		}
+	}
 }
 
 func (dc *dockerClient) RunContainer(
@@ -290,7 +422,7 @@ func (dc *dockerClient) RunContainer(
 		if config.ExposedPorts == nil {
 			config.ExposedPorts = nat.PortSet{}
 		}
-		for _, port := range GetPrimaryContainerPorts(flowID) {
+		for _, port := range choosePrimaryContainerPorts(flowID, dc.usedHostPorts(ctx)) {
 			natPort := nat.Port(fmt.Sprintf("%d/tcp", port))
 			hostConfig.PortBindings[natPort] = []nat.PortBinding{
 				{

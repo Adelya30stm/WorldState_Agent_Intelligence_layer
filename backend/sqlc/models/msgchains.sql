@@ -83,6 +83,13 @@ SELECT
 FROM msgchains mc
 WHERE mc.id = $1;
 
+-- name: LockMsgChain :one
+SELECT
+  mc.*
+FROM msgchains mc
+WHERE mc.id = $1
+FOR UPDATE;
+
 -- name: CreateMsgChain :one
 INSERT INTO msgchains (
   type,

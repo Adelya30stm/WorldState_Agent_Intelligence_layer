@@ -8,6 +8,24 @@ However, the World State architecture is not conceptually tied to PentAGI: any a
 
 World State is still a persistent structured representation of the pentest environment. It is also an event-driven control loop: committed mutations become ordered revisions, those revisions are delivered only to the primary agent, and the planner chooses the next action from that evidence.
 
+## Run environment
+
+Qualitative analysis of agent executions used this stack, not a synthetic trace replay.
+
+| Item | Value |
+|---|---|
+| **Target** | Authorized black-box web pentest of a production HTTPS consumer application (origin plus in-scope hostnames). The site name is omitted. |
+| **Primary Agent** | OpenAI `gpt-5.4-mini` on Chat Completions (`backend/pkg/providers/openai/config.yml`). |
+| **Primary settings** | `max_tokens: 16384`, `reasoning.effort: none` (required for function tools on this model). No `temperature` / `top_p` on this slot; those apply to non-reasoning helpers such as `searcher` (`temperature: 0.7`, `top_p: 0.8`). |
+| **Engagements** | Two live flows on 6 September 2026 against that target. **Flow 16** stopped on the first Primary Agent call before any tool ran. **Flow 17** ran tools and World State ingest for on the order of hours until the planner `done` gate. |
+
+<p align="center">
+  <img src="./docs/images/agent-world-state.png" alt="Penetration Testing — Agent World State" width="100%">
+</p>
+<p align="center">
+  <em>Store writes World State. Primary receives delivery. Subagents do not.</em>
+</p>
+
 ## Agent World State
 
 The design was motivated by the World Models framework introduced by Yang et al., which characterizes a world model through representations of environment dynamics, task structure, and reward. We adapt this idea to autonomous penetration testing, where the environment continuously changes as agents discover hosts, services, vulnerabilities, and exploitation outcomes. Building on this framework, we introduce a revisioned Event Journal and cursor-based state-delivery mechanism to make changes in the persistent World State observable to subsequent agent reasoning.
@@ -23,7 +41,7 @@ A durable revision cursor records the latest World State revision consumed by ea
 
 ## Thesis
 
-World State is still a persistent structured representation of the pentest environment. It is also an event-driven control loop: committed mutations become ordered revisions, those revisions are delivered only to the primary agent, and the planner chooses the next action from that evidence.
+World State is a persistent structured representation of the pentest environment. It is also an event-driven control loop: committed mutations become ordered revisions, those revisions are delivered only to the primary agent, and the planner chooses the next action from that evidence.
 
 | 1 TX | Primary only | Next turn | Cursor |
 |---|---|---|---|
@@ -40,39 +58,46 @@ flowchart LR
   R["Revision N<br/>flow-scoped BIGINT head<br/>advisory lock serializes allocation"]
   D["Delta / Checkpoint<br/>baseline if no cursor<br/>delta if it fits<br/>checkpoint if limits trip"]
   P["Primary Agent<br/>&lt;world_state&gt; envelope<br/>at the next model-turn boundary"]
-  A["Attack Planner<br/>journal + projection evidence<br/>not a live Graphiti query"]
   N["Next Action<br/>tool, subtask,<br/>or durable ask wait"]
   E["Execution<br/>tool run and result<br/>extract/ingest feeds the next mutation"]
 
-  M --> J --> R --> D --> P --> A --> N --> E
+  M --> J --> R --> D --> P --> N --> E
   E -->|"extract / ingest"| M
 ```
 
 | Stage | What happens |
 |---|---|
-| **State Mutation** | Entity, link, and lifecycle change in one transaction. |
+| **State Mutation** | Entity, link, and lifecycle change in one transaction via `pkg/worldstate.Store`. |
 | **Event Journal** | `world_state_events` appends an ordered fact. |
 | **Revision N** | Flow-scoped `BIGINT` head. Advisory lock serializes allocation. |
 | **Delta / Checkpoint** | Baseline if no cursor. Delta if it fits. Checkpoint if limits trip. |
 | **Primary Agent** | `<world_state>` envelope at the next model-turn boundary. |
-| **Attack Planner** | Journal + projection evidence, not a live Graphiti query. |
-| **Next Action** | Tool, subtask, or durable ask wait. |
+| **Next Action** | Tool, subtask, or durable ask wait. `performPlanner` still calls adviser. `pkg/attackplan` is not on this path. |
 | **Execution** | Tool run and result. Extract/ingest feeds the next mutation. |
 
 Return path: **Execution → extract/ingest → State Mutation**.
 
-## What the old diagram still gets right
+## Write path
 
-**Agents.** Researcher, Developer, Executor, Human, and System propose observations. They do not write PostgreSQL. Tool output goes through `WorldStateService`.
+World State rows are written only by `pkg/worldstate.Store`. Agents never issue SQL. `researcher` / `executor` / `human` / `system` are journal actor labels, not five separate agents.
 
-**Lifecycle.** `unknown → discovered → scanning → assessed → vulnerable → exploited → remediated`. `WorldStateService` validates each transition before commit.
+| Source | Mechanism | Actor |
+|---|---|---|
+| Finished tool output | `IngestToolResult` | `executor` |
+| Primary agent | `world_state_update` | `researcher` |
+| Pentester | `world_state_update` | `executor` |
+| Human | REST candidate review | `human` |
+| Link upserts | Store internals | `system` |
 
-```mermaid
-flowchart LR
-  unknown --> discovered --> scanning --> assessed --> vulnerable --> exploited --> remediated
-```
+The `developer` actor constant exists and is unused.
 
-**Split of stores.** PostgreSQL is operational truth. Graphiti/Neo4j is an optional semantic index. `msglogs`, `termlogs`, and `toolcalls` are execution history, not World State.
+## Lifecycle
+
+`unknown → discovered → scanning → assessed → vulnerable → exploited → remediated`. `ValidateTransition()` rejects anything outside that graph before commit. Allowed skips: `discovered → assessed`, `assessed|vulnerable → remediated`.
+
+## Split of stores
+
+PostgreSQL is operational truth. Graphiti/Neo4j is an optional semantic index and is not synced from `world_state_*`. `msglogs`, `termlogs`, and `toolcalls` are execution history, not World State. REST `WorldStateService` is UI (plus human candidate review); it is not the agent mutation orchestrator.
 
 ## PostgreSQL
 
@@ -84,6 +109,8 @@ flowchart LR
 | `world_state_events` | Ordered journal facts. Revision N is the flow head. | Journal |
 | `world_state_chain_cursors` | What this primary chain has already consumed | Delivery |
 | `agent_chain_waits` | Durable primary ask vs World State wake race | Wake |
+| `world_state_scope` | Allowed domains and CIDRs for ingest | Scope |
+| `world_state_candidates` | Grey-zone hosts waiting for human review | Scope |
 
 ## Delivery selection
 
@@ -123,153 +150,3 @@ A primary ask persists `agent_chain_waits`. The first committed winner is either
 | **Planning input** | Existing planner/context mechanisms | Structured World State evidence available to subsequent planning |
 | **Observability** | Execution-oriented logs and UI | World State graph, transitions, revisions, and execution correlation |
 | **Architectural role** | Pentest execution engine | State-intelligence and feedback layer |
-## Quick Start (Docker)
-
-### Prerequisites
-
-- Docker + Docker Compose
-- 4+ GB RAM recommended
-- 20+ GB free disk space recommended
-
-### 1. Prepare environment
-
-```bash
-cp .env.example .env
-```
-
-If needed, copy provider examples:
-
-```bash
-cp examples/configs/custom-openai.provider.yml example.custom.provider.yml
-cp examples/configs/ollama-llama318b.provider.yml example.ollama.provider.yml
-```
-
-### 2. Configure at least one LLM provider
-
-Set one of the following in `.env`:
-
-- `OPEN_AI_KEY`
-- `ANTHROPIC_API_KEY`
-- `GEMINI_API_KEY`
-- other supported provider credentials
-
-### 3. Start core stack
-
-```bash
-docker compose up -d
-```
-
-### 4. Open application
-
-- Main UI: `https://localhost:8443`
-- GraphQL: `https://localhost:8443/api/v1/graphql`
-- Swagger: `https://localhost:8443/api/v1/swagger/index.html`
-
-## Configuration
-
-Important variable groups in `.env`:
-
-- **Server**: `PUBLIC_URL`, `SERVER_HOST`, `SERVER_PORT`, `SERVER_USE_SSL`
-- **Database**: `DATABASE_URL`
-- **LLM providers**: `OPEN_AI_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `BEDROCK_*`, `OLLAMA_*`, etc.
-- **Search providers (optional)**: `DUCKDUCKGO_ENABLED`, `GOOGLE_API_KEY`, `GOOGLE_CX_KEY`, `TAVILY_API_KEY`, `TRAVERSAAL_API_KEY`, `PERPLEXITY_API_KEY`, `SEARXNG_URL`
-- **OAuth (optional)**: `OAUTH_GOOGLE_CLIENT_ID`, `OAUTH_GOOGLE_CLIENT_SECRET`, `OAUTH_GITHUB_CLIENT_ID`, `OAUTH_GITHUB_CLIENT_SECRET`
-
-For full variable details, see project docs in `backend/docs/`.
-
-## Local Development
-
-### Backend (`backend/`)
-
-```bash
-go mod download
-go build -trimpath -o pentagi ./cmd/pentagi
-go test ./...
-```
-
-Generate GraphQL resolvers (after schema changes):
-
-```bash
-go run github.com/99designs/gqlgen --config ./gqlgen/gqlgen.yml
-```
-
-Generate Swagger docs (after REST annotation changes):
-
-```bash
-swag init -g ../../pkg/server/router.go -o pkg/server/docs/ --parseDependency --parseInternal --parseDepth 2 -d cmd/pentagi
-```
-
-### Frontend (`frontend/`)
-
-```bash
-npm ci
-npm run dev
-npm run build
-npm run lint
-npm run test
-```
-
-Regenerate GraphQL types after `.graphql` changes:
-
-```bash
-npm run graphql:generate
-```
-
-## Optional Stacks
-
-Observability:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose-observability.yml up -d
-```
-
-Langfuse:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose-langfuse.yml up -d
-```
-
-Graphiti:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose-graphiti.yml up -d
-```
-
-All optional stacks:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose-langfuse.yml -f docker-compose-graphiti.yml -f docker-compose-observability.yml up -d
-```
-
-## Helper Binaries
-
-Located in `backend/cmd/`:
-
-- `ctester`: container/tool execution checks
-- `ftester`: function/tool-calling tests
-- `etester`: embedding provider tests
-- `installer`: interactive setup wizard
-
-Examples:
-
-```bash
-cd backend && go test ./...
-cd backend && go run cmd/ctester/*.go -verbose
-```
-
-## API Endpoints
-
-- GraphQL: `/api/v1/graphql`
-- Swagger UI: `/api/v1/swagger/index.html`
-
-For API authentication, use bearer tokens from the Settings UI (`API Tokens`).
-
-## Security and Legal
-
-- Use only on systems you are explicitly authorized to test.
-- Never commit secrets (`.env`, API keys, private credentials).
-- Rotate keys and tokens regularly.
-- Review TLS, network exposure, and access control before production deployment.
-
-License: MIT. See `LICENSE`, `NOTICE`, and `EULA.md`.
-

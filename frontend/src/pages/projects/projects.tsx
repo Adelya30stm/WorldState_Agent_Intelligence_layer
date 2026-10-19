@@ -36,6 +36,8 @@ import { StatusType, useFlowQuery } from '@/graphql/types';
 import { type Finding } from '@/hooks/use-findings';
 import { axios } from '@/lib/axios';
 import { useSidebarFlows } from '@/providers/sidebar-flows-provider';
+import { useWorldStateModel } from '@/features/world-state/use-world-state-model';
+import { WorldStateModelView } from '@/features/world-state/world-state-model-view';
 
 type PhaseStatus = 'pending' | 'active' | 'done';
 
@@ -658,9 +660,11 @@ interface PhaseCardProps {
     phase: PentestPhase;
     scopeItems?: string[];
     onScopeChange?: (items: string[]) => void;
+    target?: string;
+    onTargetChange?: (v: string) => void;
 }
 
-const PhaseCard = ({ cookies, disabled, launchLabel, onAutofill, onCookiesChange, onLaunch, phase, scopeItems, onScopeChange }: PhaseCardProps) => {
+const PhaseCard = ({ cookies, disabled, launchLabel, onAutofill, onCookiesChange, onLaunch, phase, scopeItems, onScopeChange, target, onTargetChange }: PhaseCardProps) => {
     const [afText, setAfText] = useState('');
     const [afLoading, setAfLoading] = useState(false);
     const [afError, setAfError] = useState('');
@@ -753,6 +757,17 @@ const PhaseCard = ({ cookies, disabled, launchLabel, onAutofill, onCookiesChange
             </div>
 
             {/* Extra inputs */}
+            {phase.id !== 'planning' && onTargetChange && (
+                <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2 py-1.5">
+                    <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                    <Input
+                        className="h-6 border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
+                        placeholder="Target: domain, IP, URL…"
+                        value={target ?? ''}
+                        onChange={(e) => onTargetChange(e.target.value)}
+                    />
+                </div>
+            )}
             {phase.id === 'planning' && onScopeChange && (
                 <ScopeTagInput items={scopeItems ?? []} onChange={onScopeChange} />
             )}
@@ -851,6 +866,7 @@ const WorldStateDashboardSection = () => {
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['target', 'vulnerability', 'threat']));
     const [links, setLinks] = useState<WorldStateLink[]>([]);
     const [viewMode, setViewMode] = useState<'graph' | 'table'>('graph');
+    const { data: model, error: modelError, loading: modelLoading, refresh: refreshModel } = useWorldStateModel(selectedFlowId || null);
 
     const candidateFlows = useMemo(
         () => [...flows].sort((a, b) => {
@@ -867,17 +883,22 @@ const WorldStateDashboardSection = () => {
     }, [candidateFlows, selectedFlowId]);
 
     useEffect(() => {
-        if (!selectedFlowId) return;
+        setEntities([]);
+        setLinks([]);
+        if (!selectedFlowId || model?.schema_version !== 1) return;
+        let cancelled = false;
         setLoading(true);
         axios
             .get<never, WorldStateResponse>(`/flows/${selectedFlowId}/worldstate`)
             .then((res) => {
+                if (cancelled) return;
                 setEntities(res.data?.entities ?? []);
                 setLinks(res.data?.links ?? []);
             })
-            .catch(() => { setEntities([]); setLinks([]); })
-            .finally(() => setLoading(false));
-    }, [selectedFlowId]);
+            .catch(() => { if (!cancelled) { setEntities([]); setLinks([]); } })
+            .finally(() => { if (!cancelled) setLoading(false); });
+        return () => { cancelled = true; };
+    }, [selectedFlowId, model?.schema_version]);
 
     const neo4jEntities = useMemo(
         () => entities.filter((e) => e.metadata?.source === 'neo4j'),
@@ -908,10 +929,10 @@ const WorldStateDashboardSection = () => {
                         <div>
                             <CardTitle className="text-sm font-semibold">World State</CardTitle>
                             <p className="mt-0.5 text-[11px] text-muted-foreground">
-                                Attack surface from knowledge graph
+                                {model?.schema_version === 1 ? 'Attack surface from knowledge graph' : 'Recorded objects, checks and run results'}
                             </p>
                         </div>
-                        {neo4jEntities.length > 0 && (
+                        {model?.schema_version === 1 && neo4jEntities.length > 0 && (
                             <div className="flex items-center gap-2 text-[11px]">
                                 {(byType['target']        ?? 0) > 0 && <span className="rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-700">{byType['target']} targets</span>}
                                 {(byType['vulnerability'] ?? 0) > 0 && <span className="rounded-md bg-red-50 px-2 py-0.5 font-medium text-red-700">{byType['vulnerability']} vulns</span>}
@@ -934,7 +955,7 @@ const WorldStateDashboardSection = () => {
                                 ))}
                             </select>
                         )}
-                        <div className="flex overflow-hidden rounded border text-[11px]">
+                        {model?.schema_version === 1 && <div className="flex overflow-hidden rounded border text-[11px]">
                             <button
                                 className={`px-2 py-1 ${viewMode === 'graph' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
                                 onClick={() => setViewMode('graph')}
@@ -945,12 +966,19 @@ const WorldStateDashboardSection = () => {
                                 onClick={() => setViewMode('table')}
                                 type="button"
                             >Table</button>
-                        </div>
+                        </div>}
                     </div>
                 </div>
             </CardHeader>
             <CardContent className="pt-0">
-                {loading ? (
+                {model?.schema_version === 2 ? (
+                    <div className="h-[520px]"><WorldStateModelView key={selectedFlowId} model={model} error={modelError} loading={modelLoading} onRefresh={refreshModel} /></div>
+                ) : !model ? (
+                    <div className="space-y-2 py-6 text-center text-xs text-muted-foreground">
+                        <p role={modelError ? 'alert' : 'status'}>{modelError ?? (selectedFlowId ? 'Loading World State…' : 'Select a flow.')}</p>
+                        {modelError && <Button variant="outline" onClick={refreshModel}>Retry</Button>}
+                    </div>
+                ) : loading ? (
                     <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
                         Loading knowledge graph…
                     </div>
@@ -1085,16 +1113,20 @@ const deriveWsFindings = (entities: WorldStateEntity[]): WsFinding[] =>
 const FlowFindings = ({ flowId }: { flowId: string }) => {
     const [findings, setFindings] = useState<WsFinding[]>([]);
     const [loading, setLoading] = useState(false);
+    const { data: model, error: modelError, loading: modelLoading, refresh: refreshModel } = useWorldStateModel(flowId || null);
 
     useEffect(() => {
-        if (!flowId) { setFindings([]); return; }
+        setFindings([]);
+        if (!flowId || model?.schema_version !== 1) return;
+        let cancelled = false;
         setLoading(true);
         axios
             .get<never, WorldStateResponse>(`/flows/${flowId}/worldstate`)
-            .then((res) => setFindings(deriveWsFindings(res.data?.entities ?? [])))
-            .catch(() => setFindings([]))
-            .finally(() => setLoading(false));
-    }, [flowId]);
+            .then((res) => { if (!cancelled) setFindings(deriveWsFindings(res.data?.entities ?? [])); })
+            .catch(() => { if (!cancelled) setFindings([]); })
+            .finally(() => { if (!cancelled) setLoading(false); });
+        return () => { cancelled = true; };
+    }, [flowId, model?.schema_version]);
 
     const counts = useMemo(() => {
         const c: Record<Finding['severity'], number> = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
@@ -1109,6 +1141,13 @@ const FlowFindings = ({ flowId }: { flowId: string }) => {
         Low:      'bg-blue-500',
         Info:     'bg-slate-400',
     };
+
+    if (model?.schema_version === 2) {
+        return <div className="h-[480px] overflow-hidden rounded-xl border"><WorldStateModelView key={flowId} model={model} error={modelError} loading={modelLoading} onRefresh={refreshModel} findingsOnly /></div>;
+    }
+    if (!model) {
+        return <div className="space-y-2 rounded-xl border p-6 text-sm text-muted-foreground"><p role={modelError ? 'alert' : 'status'}>{modelError ?? (flowId ? 'Loading findings…' : 'Select an engagement above.')}</p>{modelError && <Button onClick={refreshModel} variant="outline">Retry</Button>}</div>;
+    }
 
     return (
         <div className="flex flex-col rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
@@ -1413,6 +1452,7 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
     const [target, setTarget] = useState('');
     const [cookies, setCookies] = useState('');
     const [planningScope, setPlanningScope] = useState<string[]>([]);
+    const [phaseTargets, setPhaseTargets] = useState<Record<string, string>>({});
     const [showPlanning, setShowPlanning] = useState(false);
 
     // Extract phase inputs (target, scope list, session cookies) from pasted
@@ -1432,9 +1472,8 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
         if (d?.cookies?.trim()) setCookies(d.cookies.trim());
     };
 
-    const handleLaunch = (phase: PentestPhase) => {
-        const t = target.trim();
-        if (!t) return;
+    const handleLaunch = (phase: PentestPhase, explicitTarget?: string) => {
+        const t = (explicitTarget ?? target).trim() || 'the target application';
         let promptText = phase.prompt(t);
         if (phase.id === 'planning' && planningScope.length > 0) {
             promptText += ` The scope includes the following targets: ${planningScope.join(', ')}.`;
@@ -1447,8 +1486,6 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
         }
         navigate(`/flows/new?prompt=${encodeURIComponent(promptText)}`);
     };
-
-    const noTarget = !target.trim();;
 
     return (
         <>
@@ -1525,20 +1562,25 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
 
                         {/* Phase grid */}
                         <div className="grid grid-cols-2 gap-4 xl:grid-cols-3 2xl:grid-cols-4">
-                            {PHASE_METADATA.map((phase) => (
+                            {PHASE_METADATA.map((phase) => {
+                                const effectiveTarget = (phaseTargets[phase.id] || target).trim();
+                                return (
                                 <PhaseCard
-                                    key={phase.id}
-                                    phase={phase}
-                                    disabled={phase.id === 'planning' ? false : noTarget}
-                                    launchLabel={phase.id === 'planning' ? 'Open Planning' : undefined}
                                     cookies={phase.id === 'recon' || phase.id === 'auth-testing' ? cookies : undefined}
+                                    disabled={false}
+                                    key={phase.id}
+                                    launchLabel={phase.id === 'planning' ? 'Open Planning' : undefined}
                                     onAutofill={fillFromText}
                                     onCookiesChange={phase.id === 'recon' || phase.id === 'auth-testing' ? setCookies : undefined}
-                                    scopeItems={phase.id === 'planning' ? planningScope : undefined}
+                                    onLaunch={() => phase.id === 'planning' ? setShowPlanning(true) : handleLaunch(phase, effectiveTarget)}
                                     onScopeChange={phase.id === 'planning' ? setPlanningScope : undefined}
-                                    onLaunch={() => phase.id === 'planning' ? setShowPlanning(true) : handleLaunch(phase)}
+                                    onTargetChange={phase.id !== 'planning' ? (v) => setPhaseTargets((prev) => ({ ...prev, [phase.id]: v })) : undefined}
+                                    phase={phase}
+                                    scopeItems={phase.id === 'planning' ? planningScope : undefined}
+                                    target={phase.id !== 'planning' ? (phaseTargets[phase.id] ?? '') : undefined}
                                 />
-                            ))}
+                                );
+                            })}
                         </div>
                     </>
                 )}

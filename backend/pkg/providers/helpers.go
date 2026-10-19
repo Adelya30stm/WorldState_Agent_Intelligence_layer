@@ -20,7 +20,6 @@ import (
 	"pentagi/pkg/providers/pconfig"
 	"pentagi/pkg/templates"
 	"pentagi/pkg/tools"
-	"pentagi/pkg/worldstate"
 
 	"github.com/sirupsen/logrus"
 	"github.com/vxcontrol/langchaingo/llms"
@@ -707,15 +706,6 @@ func (fp *flowProvider) prepareExecutionContext(ctx context.Context, taskID, sub
 	executionContext, err := summarizeHandler(ctx, executionContextRaw)
 	if err != nil {
 		return "", wrapErrorEndEvaluatorSpan(ctx, evaluator, "failed to summarize execution context", err)
-	}
-
-	if entities, wsErr := fp.db.GetWorldStateEntitiesByFlow(ctx, fp.flowID); wsErr == nil {
-		if snap := worldstate.FormatSnapshot(entities); snap != "" {
-			executionContext = executionContext + "\n\n" + snap
-		}
-	} else {
-		logrus.WithContext(ctx).WithError(wsErr).WithField("flow_id", fp.flowID).
-			Warn("failed to load world state for execution context snapshot")
 	}
 
 	evaluator.End(

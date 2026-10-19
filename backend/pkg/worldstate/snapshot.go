@@ -54,7 +54,7 @@ func FormatSnapshot(entities []database.WorldStateEntity) string {
 			limit = len(list)
 		}
 		for _, e := range list[:limit] {
-			fmt.Fprintf(&b, "  - %s [%s]\n", e.EntityKey, e.State)
+			fmt.Fprintf(&b, "  - %s [%s]\n", safeEntityKey(e.EntityKey), e.State)
 		}
 		if len(list) > limit {
 			fmt.Fprintf(&b, "  - ... %d more\n", len(list)-limit)
@@ -62,6 +62,7 @@ func FormatSnapshot(entities []database.WorldStateEntity) string {
 	}
 
 	writeGroup("Hosts:", EntityTypeHost)
+	writeGroup("Services:", EntityTypeService)
 	writeGroup("Endpoints:", EntityTypeEndpoint)
 	writeGroup("Credentials:", EntityTypeCredential)
 	writeGroup("Findings:", EntityTypeFinding)

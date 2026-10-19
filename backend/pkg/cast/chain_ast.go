@@ -138,11 +138,18 @@ func NewChainAST(chain []llms.MessageContent, force bool) (*ChainAST, error) {
 				unmatchedToolCallIDs := strings.Join(toolCallsInfo.UnmatchedToolCallIDs, ", ")
 				return fmt.Errorf("tool calls with IDs [%s] have no response", unmatchedToolCallIDs)
 			}
-			// Try to add a fallback request for each unmatched tool call
+			// Extra results for an ID that already has a tool_use must not synthesize
+			// another tool_use with the same ID (Anthropic: tool_use ids must be unique).
+			currentBodyPair.keepFirstToolResponsePerID()
+			toolCallsInfo = currentBodyPair.GetToolCallsInfo()
 			for _, toolCallID := range toolCallsInfo.UnmatchedToolCallIDs {
+				if currentBodyPair.AIMessage != nil && aiHasToolCallID(currentBodyPair.AIMessage, toolCallID) {
+					continue
+				}
 				toolCallResponse := toolCallsInfo.UnmatchedToolCalls[toolCallID].Response
 				currentBodyPair.AIMessage.Parts = append(currentBodyPair.AIMessage.Parts, llms.ToolCall{
-					ID: toolCallID,
+					ID:   toolCallID,
+					Type: "function",
 					FunctionCall: &llms.FunctionCall{
 						Name:      toolCallResponse.Name,
 						Arguments: fallbackRequestArgs,
@@ -234,12 +241,20 @@ func NewChainAST(chain []llms.MessageContent, force bool) (*ChainAST, error) {
 			}
 
 			// Ensure we have a body pair to add this tool message to
-			if currentBodyPair == nil || currentBodyPair.Type == Completion {
+			if currentBodyPair == nil {
 				if !force {
 					return nil, fmt.Errorf("unexpected tool message without a preceding AI message with tool calls")
 				}
-				// If force is true and we don't have a proper body pair, skip this message
 				continue
+			}
+			if currentBodyPair.Type == Completion {
+				if !force {
+					return nil, fmt.Errorf("unexpected tool message without a preceding AI message with tool calls")
+				}
+				if currentBodyPair.AIMessage == nil {
+					continue
+				}
+				currentBodyPair.Type = RequestResponse
 			}
 
 			// Add this tool message to the current body pair
@@ -387,6 +402,52 @@ func (pair *BodyPair) GetToolCallsInfo() ToolCallsInfo {
 	}
 }
 
+func aiHasToolCallID(ai *llms.MessageContent, id string) bool {
+	if ai == nil {
+		return false
+	}
+	for _, part := range ai.Parts {
+		toolCall, ok := part.(llms.ToolCall)
+		if ok && toolCall.FunctionCall != nil && toolCall.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (pair *BodyPair) keepFirstToolResponsePerID() {
+	if pair == nil {
+		return
+	}
+	seen := make(map[string]struct{})
+	kept := make([]*llms.MessageContent, 0, len(pair.ToolMessages))
+	for _, toolMsg := range pair.ToolMessages {
+		if toolMsg == nil {
+			continue
+		}
+		parts := make([]llms.ContentPart, 0, len(toolMsg.Parts))
+		for _, part := range toolMsg.Parts {
+			resp, ok := part.(llms.ToolCallResponse)
+			if !ok {
+				parts = append(parts, part)
+				continue
+			}
+			if _, dup := seen[resp.ToolCallID]; dup {
+				continue
+			}
+			seen[resp.ToolCallID] = struct{}{}
+			parts = append(parts, part)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		msg := *toolMsg
+		msg.Parts = parts
+		kept = append(kept, &msg)
+	}
+	pair.ToolMessages = kept
+}
+
 func (pair *BodyPair) IsValid() bool {
 	if pair.Type != Completion && pair.Type != RequestResponse && pair.Type != Summarization {
 		return false
@@ -444,7 +505,12 @@ func NewBodyPair(aiMsg *llms.MessageContent, toolMsgs []*llms.MessageContent) *B
 				if toolCall.FunctionCall == nil {
 					partsToDelete = append(partsToDelete, id)
 					continue
-				} else if toolCall.FunctionCall.Name == SummarizationToolName {
+				}
+				if toolCall.Type == "" {
+					toolCall.Type = "function"
+					aiMsg.Parts[id] = toolCall
+				}
+				if toolCall.FunctionCall.Name == SummarizationToolName {
 					pairType = Summarization
 				} else {
 					pairType = RequestResponse

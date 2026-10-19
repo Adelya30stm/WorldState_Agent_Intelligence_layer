@@ -2,9 +2,11 @@ package controller
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"pentagi/pkg/database"
 	obs "pentagi/pkg/observability"
@@ -30,6 +32,8 @@ type SubtaskWorker interface {
 	GetResult(ctx context.Context) (string, error)
 	SetResult(ctx context.Context, result string) error
 	PutInput(ctx context.Context, input string) error
+	ResumePrimaryWait(ctx context.Context, wait database.AgentChainWait) (bool, error)
+	RestorePrimaryWait(msgchainID int64) bool
 	Run(ctx context.Context) error
 	Finish(ctx context.Context) error
 }
@@ -40,6 +44,7 @@ type subtaskWorker struct {
 	updater    TaskUpdater
 	completed  bool
 	waiting    bool
+	resumeWait *database.AgentChainWait
 }
 
 func NewSubtaskWorker(
@@ -271,6 +276,37 @@ func (stw *subtaskWorker) PutInput(ctx context.Context, input string) error {
 	return nil
 }
 
+func (stw *subtaskWorker) ResumePrimaryWait(ctx context.Context, wait database.AgentChainWait) (bool, error) {
+	stw.mx.Lock()
+	defer stw.mx.Unlock()
+	if stw.completed || !stw.waiting || stw.subtaskCtx.MsgChainID != wait.MsgchainID {
+		return false, nil
+	}
+	if _, err := stw.subtaskCtx.DB.GetClaimedPrimaryWorldStateResume(ctx, database.GetClaimedPrimaryWorldStateResumeParams{
+		MsgchainID: wait.MsgchainID, PendingToolCallID: wait.PendingToolCallID,
+		ResolutionRef: wait.ResolutionRef, ResumeIntent: wait.ResumeIntent, LeaseOwner: wait.LeaseOwner,
+	}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to validate World State resume for subtask %d: %w", stw.subtaskCtx.SubtaskID, err)
+	}
+	stw.waiting = false
+	claim := wait
+	stw.resumeWait = &claim
+	return true, nil
+}
+
+func (stw *subtaskWorker) RestorePrimaryWait(msgchainID int64) bool {
+	stw.mx.Lock()
+	defer stw.mx.Unlock()
+	if stw.completed || stw.subtaskCtx.MsgChainID != msgchainID {
+		return false
+	}
+	stw.waiting = true
+	return true
+}
+
 func (stw *subtaskWorker) Run(ctx context.Context) error {
 	if stw.IsCompleted() {
 		return fmt.Errorf("subtask has already completed")
@@ -282,6 +318,37 @@ func (stw *subtaskWorker) Run(ctx context.Context) error {
 
 	if err := stw.SetStatus(ctx, database.SubtaskStatusRunning); err != nil {
 		return err
+	}
+	stw.mx.RLock()
+	resumeWait := stw.resumeWait
+	stw.mx.RUnlock()
+	if resumeWait == nil {
+		owner := sql.NullString{String: fmt.Sprintf("controller-resume-%d-%d", stw.subtaskCtx.MsgChainID, time.Now().UnixNano()), Valid: true}
+		claimed, err := stw.subtaskCtx.DB.ClaimPrimaryWorldStateResumeForController(ctx, database.ClaimPrimaryWorldStateResumeForControllerParams{
+			LeaseOwner: owner, LeaseExpiresAt: sql.NullTime{Time: time.Now().Add(10 * time.Second), Valid: true},
+			MsgchainID: stw.subtaskCtx.MsgChainID,
+		})
+		if err == nil {
+			resumeWait = &claimed
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			_ = stw.SetStatus(ctx, database.SubtaskStatusWaiting)
+			return fmt.Errorf("failed to claim World State resume for subtask %d: %w", stw.subtaskCtx.SubtaskID, err)
+		}
+	}
+	if resumeWait != nil {
+		if _, err := stw.subtaskCtx.DB.AcceptClaimedPrimaryWorldStateResume(ctx, database.AcceptClaimedPrimaryWorldStateResumeParams{
+			MsgchainID: resumeWait.MsgchainID, PendingToolCallID: resumeWait.PendingToolCallID,
+			ResolutionRef: resumeWait.ResolutionRef, ResumeIntent: resumeWait.ResumeIntent, LeaseOwner: resumeWait.LeaseOwner,
+		}); err != nil {
+			_ = stw.SetStatus(ctx, database.SubtaskStatusWaiting)
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("stale World State resume for subtask %d", stw.subtaskCtx.SubtaskID)
+			}
+			return fmt.Errorf("failed to accept World State resume for subtask %d: %w", stw.subtaskCtx.SubtaskID, err)
+		}
+		stw.mx.Lock()
+		stw.resumeWait = nil
+		stw.mx.Unlock()
 	}
 
 	var (

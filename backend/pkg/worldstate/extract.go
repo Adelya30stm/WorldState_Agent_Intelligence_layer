@@ -9,6 +9,7 @@ import (
 const (
 	EntityTypeHost       = "host"
 	EntityTypeEndpoint   = "endpoint"
+	EntityTypeService    = "service"
 	EntityTypeFinding    = "finding"
 	EntityTypeCredential = "credential"
 )
@@ -21,22 +22,63 @@ type Candidate struct {
 }
 
 var (
-	urlRE        = regexp.MustCompile(`https?://[^\s'"` + "`" + `,<>)\]]+`)
-	ipv4RE       = regexp.MustCompile(`\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b`)
-	hostRE       = regexp.MustCompile(`\b([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+)\b`)
-	cveRE        = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,7}\b`)
-	passwordRE   = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[=:]\s*([^\s"'\\,]{3,64})`)
-	basicAuthRE  = regexp.MustCompile(`(?i)Authorization:\s*Basic\s+([A-Za-z0-9+/=]+)`)
-	userPassRE   = regexp.MustCompile(`(?i)\b(?:user(?:name)?|login)\s*[=:]\s*([^\s"'\\,]{2,64}).{0,80}?(?:password|passwd|pwd)\s*[=:]\s*([^\s"'\\,]{3,64})`)
-	findingHintRE = regexp.MustCompile(`(?i)\b(SQL injection|XSS|CSRF|RCE|SSRF|IDOR|path traversal|remote code execution|authentication bypass)\b`)
+	urlRE           = regexp.MustCompile(`https?://[^\s'"` + "`" + `,<>)\]]+`)
+	ipv4RE          = regexp.MustCompile(`\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b`)
+	hostRE          = regexp.MustCompile(`\b([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+)\b`)
+	cveRE           = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,7}\b`)
+	passwordRE      = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[=:]\s*([^\s"'\\,]{3,64})`)
+	authorizationRE = regexp.MustCompile(`(?i)\bAuthorization:\s*(Basic|Bearer|Digest|Token)\s+([A-Za-z0-9+/=._~-]+)`)
+	cookieHeaderRE  = regexp.MustCompile(`(?i)\b(?:Cookie|Set-Cookie):\s*([^\r\n]+)`)
+	secretFieldRE   = regexp.MustCompile(`(?i)\b(access[_-]?token|refresh[_-]?token|token|api[_-]?key|apikey|client[_-]?secret|private[_-]?key|authorization|auth|secret|cookie|session(?:[_-]?id)?)\s*[=:]\s*([^\s"'\\,;]{3,128})`)
+	userPassRE      = regexp.MustCompile(`(?i)\b(?:user(?:name)?|login)\s*[=:]\s*([^\s"'\\,]{2,64}).{0,80}?(?:password|passwd|pwd)\s*[=:]\s*([^\s"'\\,]{3,64})`)
+	nmapReportRE    = regexp.MustCompile(`(?i)^Nmap scan report for (.+)$`)
+	nmapPortRE      = regexp.MustCompile(`(?i)^\s*(\d{1,5})/(tcp|udp)\s+(open(?:\|filtered)?)\s+(\S+)`)
+	nxcServiceRE    = regexp.MustCompile(`(?im)^\s*(SMB|HTTP|HTTPS|SSH|FTP|RDP|LDAP|WINRM)\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,5})\b`)
 )
 
 var noiseHosts = map[string]bool{
 	"localhost": true, "example.com": true, "github.com": true,
-	"npmjs.com": true, "docker.io": true, "golang.org": true,
-	"pkg.go.dev": true, "ubuntu.com": true, "debian.org": true,
+	"npmjs.com": true, "docker.io": true, "docker.com": true,
+	"golang.org": true, "pkg.go.dev": true, "ubuntu.com": true,
+	"debian.org": true, "kali.org": true, "kali.download": true,
 	"symfony.com": true, "google.com": true, "googleapis.com": true,
 	"w3.org": true, "schema.org": true, "microsoft.com": true,
+	"cloudflare.com": true, "cdnjs.cloudflare.com": true,
+	"googletagmanager.com": true, "gstatic.com": true,
+	"jquery.com": true, "jqueryui.com": true, "api.jqueryui.com": true,
+	"builtwith.com": true, "crt.sh": true, "github.io": true,
+	"discord.com": true, "discord.gg": true, "ogp.me": true,
+	"ctlogs.dev": true, "merklemap.com": true, "dnstrack.net": true,
+	"mockapi.com": true, "mokapi.io": true,
+}
+
+var noiseHostSuffixes = []string{
+	".cloudfront.net", ".github.io", ".cloudflare.com",
+	".kali.org", ".docker.com", ".docker.io", ".discord.com",
+	".mirror.ionos.com", ".cdn-perfprod.com",
+}
+
+var fileExtTLDs = map[string]bool{
+	"js": true, "css": true, "html": true, "htm": true, "ico": true,
+	"json": true, "map": true, "xml": true, "txt": true, "png": true,
+	"jpg": true, "gif": true, "svg": true, "woff": true, "woff2": true,
+	"ttf": true, "gz": true, "zip": true, "dat": true, "php": true,
+}
+
+var codeHostSuffixes = map[string]bool{
+	"get": true, "set": true, "put": true, "delete": true, "post": true,
+	"pathname": true, "replace": true, "write": true, "length": true,
+	"push": true, "gtag": true, "dialog": true, "search": true,
+	"indexof": true, "min": true, "now": true, "parse": true,
+	"format": true, "encode": true, "decode": true, "split": true,
+	"join": true, "resolve": true, "resolver": true, "lookup": true,
+	"query": true, "fetch": true, "open": true, "close": true,
+	"read": true, "url": true, "path": true, "text": true, "json": true,
+	"data": true, "status": true, "headers": true, "content": true,
+	"body": true, "params": true, "error": true, "result": true,
+	"response": true, "request": true, "handler": true, "method": true,
+	"endswith": true, "startswith": true, "includes": true, "contains": true,
+	"fixed": true,
 }
 
 // ExtractCandidates pulls hosts and endpoints from raw tool output.
@@ -44,6 +86,7 @@ var noiseHosts = map[string]bool{
 func ExtractCandidates(toolName, result string) []Candidate {
 	seen := map[string]bool{}
 	out := make([]Candidate, 0, 8)
+	safeResult := maskCredentialMaterial(result)
 
 	add := func(c Candidate) {
 		if c.Key == "" || seen[c.Key] {
@@ -53,14 +96,18 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		out = append(out, c)
 	}
 
-	for _, raw := range urlRE.FindAllString(result, -1) {
-		raw = strings.TrimRight(raw, ".,;:)]}\"'>")
+	for _, raw := range urlRE.FindAllString(safeResult, -1) {
+		raw = cleanExtractedURL(raw)
 		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
+		if err != nil || u.Host == "" || u.Scheme == "" {
 			continue
 		}
-		host := canonicalHost(u.Hostname())
-		if host == "" || noiseHosts[host] {
+		hostName := u.Hostname()
+		if looksLikeDockerBridgeIP(hostName) && strings.EqualFold(toolName, "browser") {
+			continue
+		}
+		host := canonicalHost(hostName)
+		if host == "" {
 			continue
 		}
 		add(Candidate{
@@ -71,9 +118,12 @@ func ExtractCandidates(toolName, result string) []Candidate {
 				"source": "url",
 			},
 		})
-		path := u.Path
+		path := strings.TrimRight(u.Path, "/")
 		if path == "" {
 			path = "/"
+		}
+		if strings.ContainsAny(host+path, "\\\n\r") {
+			continue
 		}
 		epKey := "endpoint:" + strings.ToLower(u.Scheme) + "://" + host + path
 		add(Candidate{
@@ -88,8 +138,8 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		})
 	}
 
-	for _, ip := range ipv4RE.FindAllString(result, -1) {
-		if isPrivateOrNoiseIP(ip) {
+	for _, ip := range ipv4RE.FindAllString(safeResult, -1) {
+		if isNoiseIP(ip) || (looksLikeDockerBridgeIP(ip) && strings.EqualFold(toolName, "browser")) {
 			continue
 		}
 		add(Candidate{
@@ -102,9 +152,12 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		})
 	}
 
+	extractNmap(safeResult, add)
+	extractNXC(safeResult, add)
+
 	// Bare hostnames (skip if already covered via URL).
 	if looksLikeReconTool(toolName) {
-		for _, h := range hostRE.FindAllString(result, -1) {
+		for _, h := range hostRE.FindAllString(safeResult, -1) {
 			host := canonicalHost(h)
 			if host == "" || noiseHosts[host] {
 				continue
@@ -120,7 +173,7 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		}
 	}
 
-	for _, cve := range cveRE.FindAllString(result, -1) {
+	for _, cve := range cveRE.FindAllString(safeResult, -1) {
 		cve = strings.ToUpper(cve)
 		add(Candidate{
 			Type: EntityTypeFinding,
@@ -128,18 +181,6 @@ func ExtractCandidates(toolName, result string) []Candidate {
 			Properties: map[string]any{
 				"cve":    cve,
 				"source": "cve",
-			},
-		})
-	}
-
-	for _, m := range findingHintRE.FindAllString(result, -1) {
-		slug := strings.ToLower(strings.ReplaceAll(m, " ", "_"))
-		add(Candidate{
-			Type: EntityTypeFinding,
-			Key:  "finding:" + slug,
-			Properties: map[string]any{
-				"title":  m,
-				"source": "keyword",
 			},
 		})
 	}
@@ -175,7 +216,7 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		}
 		add(Candidate{
 			Type: EntityTypeCredential,
-			Key:  "credential:password:" + truncateKey(pass),
+			Key:  credentialEntityKey("password"),
 			Properties: map[string]any{
 				"password": pass,
 				"source":   "password_field",
@@ -183,21 +224,59 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		})
 	}
 
-	for _, m := range basicAuthRE.FindAllStringSubmatch(result, -1) {
-		if len(m) < 2 {
+	for _, m := range authorizationRE.FindAllStringSubmatch(result, -1) {
+		if len(m) < 3 {
 			continue
 		}
-		token := strings.TrimSpace(m[1])
+		scheme := strings.ToLower(strings.TrimSpace(m[1]))
+		token := strings.TrimSpace(m[2])
 		if token == "" {
 			continue
 		}
 		add(Candidate{
 			Type: EntityTypeCredential,
-			Key:  "credential:basic:" + truncateKey(token),
+			Key:  credentialEntityKey(scheme),
 			Properties: map[string]any{
-				"auth":   "basic",
+				"auth":   scheme,
 				"token":  token,
 				"source": "authorization_header",
+			},
+		})
+	}
+
+	for _, m := range secretFieldRE.FindAllStringSubmatch(result, -1) {
+		if len(m) < 3 {
+			continue
+		}
+		kind := credentialFieldIdentity(m[1])
+		value := strings.TrimSpace(m[2])
+		if kind == "" || value == "" || looksLikePlaceholder(value) {
+			continue
+		}
+		add(Candidate{
+			Type: EntityTypeCredential,
+			Key:  credentialEntityKey(kind),
+			Properties: map[string]any{
+				kind:     value,
+				"source": "credential_field",
+			},
+		})
+	}
+
+	for _, m := range cookieHeaderRE.FindAllStringSubmatch(result, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		cookie := strings.TrimSpace(m[1])
+		if cookie == "" || looksLikePlaceholder(cookie) {
+			continue
+		}
+		add(Candidate{
+			Type: EntityTypeCredential,
+			Key:  credentialEntityKey("cookie"),
+			Properties: map[string]any{
+				"cookie": cookie,
+				"source": "cookie_header",
 			},
 		})
 	}
@@ -206,8 +285,9 @@ func ExtractCandidates(toolName, result string) []Candidate {
 }
 
 func looksLikePlaceholder(s string) bool {
-	l := strings.ToLower(s)
-	for _, p := range []string{"***", "redacted", "null", "none", "password", "changeme", "{password}", "<password>"} {
+	l := strings.ToLower(strings.TrimSpace(s))
+	l = strings.Trim(l, `"'[]{}<>`)
+	for _, p := range []string{"***", "redacted", "null", "none", "password", "changeme", "placeholder"} {
 		if l == p {
 			return true
 		}
@@ -215,12 +295,133 @@ func looksLikePlaceholder(s string) bool {
 	return false
 }
 
-func truncateKey(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if len(s) > 32 {
-		return s[:32]
+func cleanExtractedURL(raw string) string {
+	if i := strings.IndexAny(raw, "\\\x00\n\r\t"); i >= 0 {
+		raw = raw[:i]
 	}
-	return s
+	return strings.TrimRight(raw, ".,;:)]}\"'>")
+}
+
+func credentialFieldIdentity(field string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(field), "-", "_"))
+	switch normalized {
+	case "access_token", "refresh_token", "token":
+		return "token"
+	case "api_key", "apikey":
+		return "api_key"
+	case "client_secret", "secret":
+		return "secret"
+	case "private_key":
+		return "private"
+	case "authorization", "auth":
+		return "authorization"
+	case "cookie":
+		return "cookie"
+	case "session_id", "session":
+		return "session"
+	default:
+		return ""
+	}
+}
+
+func maskCredentialMaterial(result string) string {
+	masked := passwordRE.ReplaceAllString(result, "password=[REDACTED]")
+	masked = authorizationRE.ReplaceAllString(masked, "$1 [REDACTED]")
+	masked = secretFieldRE.ReplaceAllString(masked, "$1=[REDACTED]")
+	masked = cookieHeaderRE.ReplaceAllString(masked, "Cookie: [REDACTED]")
+	return masked
+}
+
+func extractNmap(result string, add func(Candidate)) {
+	currentHost := ""
+	for _, raw := range strings.Split(result, "\n") {
+		line := strings.TrimSpace(raw)
+		if m := nmapReportRE.FindStringSubmatch(line); len(m) == 2 {
+			currentHost = parseNmapTarget(m[1])
+			if currentHost == "" {
+				continue
+			}
+			props := map[string]any{"host": currentHost, "source": "nmap"}
+			if name := nmapHostname(m[1], currentHost); name != "" {
+				props["hostname"] = name
+			}
+			add(Candidate{Type: EntityTypeHost, Key: "host:" + currentHost, Properties: props})
+			continue
+		}
+		if currentHost == "" {
+			continue
+		}
+		m := nmapPortRE.FindStringSubmatch(line)
+		if len(m) != 5 {
+			continue
+		}
+		port, proto, svc := m[1], strings.ToLower(m[2]), strings.ToLower(m[4])
+		add(Candidate{
+			Type: EntityTypeService,
+			Key:  "service:" + currentHost + ":" + port + "/" + proto,
+			Properties: map[string]any{
+				"host":    currentHost,
+				"port":    port,
+				"proto":   proto,
+				"service": svc,
+				"source":  "nmap",
+			},
+		})
+	}
+}
+
+func extractNXC(result string, add func(Candidate)) {
+	for _, m := range nxcServiceRE.FindAllStringSubmatch(result, -1) {
+		if len(m) < 4 {
+			continue
+		}
+		svc, ip, port := strings.ToLower(m[1]), m[2], m[3]
+		if isNoiseIP(ip) {
+			continue
+		}
+		add(Candidate{
+			Type: EntityTypeHost,
+			Key:  "host:" + ip,
+			Properties: map[string]any{
+				"host":   ip,
+				"source": "nxc",
+			},
+		})
+		add(Candidate{
+			Type: EntityTypeService,
+			Key:  "service:" + ip + ":" + port + "/tcp",
+			Properties: map[string]any{
+				"host":    ip,
+				"port":    port,
+				"proto":   "tcp",
+				"service": svc,
+				"source":  "nxc",
+			},
+		})
+	}
+}
+
+func parseNmapTarget(s string) string {
+	s = strings.TrimSpace(s)
+	if ip := ipv4RE.FindString(s); ip != "" && !isNoiseIP(ip) {
+		return ip
+	}
+	if i := strings.Index(s, " ("); i > 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return canonicalScanHost(s)
+}
+
+func nmapHostname(raw, hostKey string) string {
+	name := strings.TrimSpace(raw)
+	if i := strings.Index(name, " ("); i > 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	name = strings.ToLower(name)
+	if name == "" || name == hostKey {
+		return ""
+	}
+	return name
 }
 
 func canonicalHost(h string) string {
@@ -229,28 +430,110 @@ func canonicalHost(h string) string {
 	if strings.Contains(h, ":") {
 		h = strings.Split(h, ":")[0]
 	}
-	if len(h) < 3 || !strings.Contains(h, ".") {
+	if len(h) < 3 || !strings.Contains(h, ".") || !isPlausibleHost(h) {
 		return ""
 	}
 	return h
 }
 
-func isPrivateOrNoiseIP(ip string) bool {
+func isPlausibleHost(h string) bool {
+	if h == "" || noiseHosts[h] {
+		return false
+	}
+	for _, suffix := range noiseHostSuffixes {
+		if strings.HasSuffix(h, suffix) {
+			return false
+		}
+	}
+	if strings.Contains(h, "_") {
+		return false
+	}
+	parts := strings.Split(h, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	tld := parts[len(parts)-1]
+	if len(tld) > 8 || fileExtTLDs[tld] || codeHostSuffixes[tld] {
+		return false
+	}
+	return true
+}
+
+func canonicalScanHost(h string) string {
+	if ip := ipv4RE.FindString(h); ip != "" && !isNoiseIP(ip) {
+		return ip
+	}
+	if fqdn := canonicalHost(h); fqdn != "" && !noiseHosts[fqdn] {
+		return fqdn
+	}
+	h = strings.ToLower(strings.TrimSpace(h))
+	if len(h) < 2 || len(h) > 63 || strings.ContainsAny(h, " ./:@") {
+		return ""
+	}
+	if noiseHosts[h] || nmapNoiseWords[h] {
+		return ""
+	}
+	return h
+}
+
+var nmapNoiseWords = map[string]bool{
+	"nmap": true, "scan": true, "report": true, "host": true, "port": true,
+	"open": true, "tcp": true, "udp": true, "filtered": true, "closed": true,
+	"unknown": true, "starting": true, "done": true, "latency": true,
+}
+
+func isNoiseIP(ip string) bool {
 	parts := strings.Split(ip, ".")
 	if len(parts) != 4 {
 		return true
 	}
-	// 0.x, 127.x, 10.x, 192.168.x, 172.16-31.x
-	if parts[0] == "0" || parts[0] == "127" || parts[0] == "10" {
+	octets := make([]int, 4)
+	for i, p := range parts {
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return true
+			}
+			n = n*10 + int(c-'0')
+			if n > 255 {
+				return true
+			}
+		}
+		if len(p) > 1 && p[0] == '0' {
+			return true
+		}
+		octets[i] = n
+	}
+	switch octets[0] {
+	case 0, 127, 255:
 		return true
 	}
-	if parts[0] == "192" && parts[1] == "168" {
+	if octets[0] >= 224 {
 		return true
-	}
-	if parts[0] == "172" {
-		return true // coarse; good enough for noise filter
 	}
 	return false
+}
+
+func looksLikeDockerBridgeIP(ip string) bool {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	var octets [4]int
+	for i, p := range parts {
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+			n = n*10 + int(c-'0')
+			if n > 255 {
+				return false
+			}
+		}
+		octets[i] = n
+	}
+	return octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31
 }
 
 func looksLikeReconTool(name string) bool {

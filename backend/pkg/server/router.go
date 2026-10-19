@@ -600,8 +600,13 @@ func setWorldStateGroup(parent *gin.RouterGroup, svc *services.WorldStateService
 	worldStateGroup := parent.Group("/flows/:flowID/worldstate")
 	{
 		worldStateGroup.GET("/", svc.GetWorldState)
+		worldStateGroup.GET("/model", svc.GetModel)
 		worldStateGroup.GET("/lifecycle", svc.GetLifecycle)
 		worldStateGroup.GET("/toolcalls", svc.GetToolCalls)
+		worldStateGroup.GET("/scope", svc.GetScope)
+		worldStateGroup.PUT("/scope", svc.PutScope)
+		worldStateGroup.GET("/candidates", svc.GetCandidates)
+		worldStateGroup.POST("/candidates/review", svc.ReviewCandidates)
 	}
 }
 

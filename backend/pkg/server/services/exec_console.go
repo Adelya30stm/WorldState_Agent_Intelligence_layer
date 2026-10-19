@@ -87,8 +87,8 @@ func (s *ExecService) resolveContainer(flowID int64) (ref, name string) {
 		}
 		return rows[0].Name, rows[0].Name
 	}
-	// Fallback to the conventional name (pentagi-terminal-<flowID>).
-	fallback := fmt.Sprintf("pentagi-terminal-%d", flowID)
+	// Fallback to the conventional name (redscope-terminal-<flowID>).
+	fallback := fmt.Sprintf("redscope-terminal-%d", flowID)
 	return fallback, fallback
 }
 

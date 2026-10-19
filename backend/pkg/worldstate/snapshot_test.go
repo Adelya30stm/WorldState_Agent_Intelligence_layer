@@ -61,3 +61,14 @@ Authorization: Basic YWRtaW46c2VjcmV0
 		t.Fatalf("expected finding candidates: %+v", cands)
 	}
 }
+
+func TestFormatSnapshotSanitizesCredentialIdentifiers(t *testing.T) {
+	snapshot := FormatSnapshot([]database.WorldStateEntity{{
+		EntityKey: "credential:token:synthetic-token-sentinel",
+		Type:      EntityTypeCredential,
+		State:     database.WorldStateLifecycleDiscovered,
+	}})
+	if strings.Contains(snapshot, "synthetic-token-sentinel") || !strings.Contains(snapshot, "credential:token") {
+		t.Fatalf("snapshot leaked or lost stable credential identity")
+	}
+}

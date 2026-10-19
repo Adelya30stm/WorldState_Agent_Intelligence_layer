@@ -3015,3 +3015,88 @@ func TestClearReasoning_IntegrationWithNormalize(t *testing.T) {
 
 	t.Log("Successfully normalized IDs and cleared reasoning for provider switch")
 }
+
+func TestNewChainAST_ForceFixAddsFunctionToolType(t *testing.T) {
+	chain := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeHuman, "request"),
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.TextContent{Text: "working"},
+			},
+		},
+		{
+			Role: llms.ChatMessageTypeTool,
+			Parts: []llms.ContentPart{
+				llms.ToolCallResponse{
+					ToolCallID: "call-unmatched",
+					Name:       "world_state_query",
+					Content:    "{}",
+				},
+			},
+		},
+	}
+
+	ast, err := NewChainAST(chain, true)
+	assert.NoError(t, err)
+
+	messages := ast.Messages()
+	foundRepairedToolCall := false
+	for _, msg := range messages {
+		if msg.Role != llms.ChatMessageTypeAI {
+			continue
+		}
+		for _, part := range msg.Parts {
+			toolCall, ok := part.(llms.ToolCall)
+			if !ok || toolCall.ID != "call-unmatched" {
+				continue
+			}
+			foundRepairedToolCall = true
+			assert.Equal(t, "function", toolCall.Type)
+			assert.NotNil(t, toolCall.FunctionCall)
+		}
+	}
+
+	assert.True(t, foundRepairedToolCall, "expected repaired tool call to be present")
+	_, err = NewChainAST(messages, false)
+	assert.NoError(t, err, "normalized chain should be parseable with strict mode")
+}
+
+func TestNewChainAST_ForceDoesNotDuplicateExistingToolCallID(t *testing.T) {
+	chain := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeHuman, "request"),
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{ID: "call-1", Type: "function", FunctionCall: &llms.FunctionCall{Name: "query", Arguments: `{}`}},
+			},
+		},
+		{
+			Role: llms.ChatMessageTypeTool,
+			Parts: []llms.ContentPart{
+				llms.ToolCallResponse{ToolCallID: "call-1", Name: "query", Content: "first"},
+				llms.ToolCallResponse{ToolCallID: "call-1", Name: "query", Content: "duplicate result"},
+			},
+		},
+	}
+
+	ast, err := NewChainAST(chain, true)
+	assert.NoError(t, err)
+
+	ids := map[string]int{}
+	for _, msg := range ast.Messages() {
+		if msg.Role != llms.ChatMessageTypeAI {
+			continue
+		}
+		for _, part := range msg.Parts {
+			toolCall, ok := part.(llms.ToolCall)
+			if !ok || toolCall.FunctionCall == nil {
+				continue
+			}
+			ids[toolCall.ID]++
+		}
+	}
+	assert.Equal(t, 1, ids["call-1"], "extra tool result must not synthesize a second tool_use with the same id")
+	_, err = NewChainAST(ast.Messages(), false)
+	assert.NoError(t, err)
+}

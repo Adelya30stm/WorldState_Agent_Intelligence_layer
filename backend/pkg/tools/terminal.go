@@ -417,7 +417,7 @@ func (t *terminal) WriteFile(ctx context.Context, flowID int64, content string, 
 }
 
 func PrimaryTerminalName(flowID int64) string {
-	return fmt.Sprintf("pentagi-terminal-%d", flowID)
+	return fmt.Sprintf("redscope-terminal-%d", flowID)
 }
 
 func (t *terminal) IsAvailable() bool {

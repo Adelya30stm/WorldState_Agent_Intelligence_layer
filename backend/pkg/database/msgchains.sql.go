@@ -1241,6 +1241,39 @@ func (q *Queries) GetUserTotalUsageStats(ctx context.Context, userID int64) (Get
 	return i, err
 }
 
+const lockMsgChain = `-- name: LockMsgChain :one
+SELECT
+  mc.id, mc.type, mc.model, mc.model_provider, mc.usage_in, mc.usage_out, mc.chain, mc.flow_id, mc.task_id, mc.subtask_id, mc.created_at, mc.updated_at, mc.usage_cache_in, mc.usage_cache_out, mc.usage_cost_in, mc.usage_cost_out, mc.duration_seconds
+FROM msgchains mc
+WHERE mc.id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockMsgChain(ctx context.Context, id int64) (Msgchain, error) {
+	row := q.db.QueryRowContext(ctx, lockMsgChain, id)
+	var i Msgchain
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.Model,
+		&i.ModelProvider,
+		&i.UsageIn,
+		&i.UsageOut,
+		&i.Chain,
+		&i.FlowID,
+		&i.TaskID,
+		&i.SubtaskID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UsageCacheIn,
+		&i.UsageCacheOut,
+		&i.UsageCostIn,
+		&i.UsageCostOut,
+		&i.DurationSeconds,
+	)
+	return i, err
+}
+
 const updateMsgChain = `-- name: UpdateMsgChain :one
 UPDATE msgchains
 SET chain = $1, duration_seconds = duration_seconds + $2

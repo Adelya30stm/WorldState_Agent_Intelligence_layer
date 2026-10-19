@@ -18,6 +18,7 @@ import (
 	"pentagi/pkg/providers/pconfig"
 	"pentagi/pkg/templates"
 	"pentagi/pkg/tools"
+	"pentagi/pkg/worldstate"
 
 	"github.com/sirupsen/logrus"
 	"github.com/vxcontrol/langchaingo/llms"
@@ -110,6 +111,8 @@ func (fp *flowProvider) performAgentChain(
 			logger.WithField("iteration", iteration).Error(msg)
 			return errors.New(msg)
 		}
+
+		chain = fp.injectWorldStateForTurn(ctx, optAgentType, chainID, chain, logger)
 
 		var result *callResult
 		if iteration >= maxCallsLimit-maxAgentShutdownIterations {
@@ -218,9 +221,23 @@ func (fp *flowProvider) performAgentChain(
 					},
 				},
 			})
-			if err := fp.updateMsgChain(ctx, chainID, chain, rollLastUpdateTime()); err != nil {
-				logger.WithError(err).Error("failed to update msg chain")
-				return err
+			durationDelta := rollLastUpdateTime()
+			var persistErr error
+			if optAgentType == pconfig.OptionsTypePrimaryAgent && funcName == tools.AskUserToolName {
+				db, ok := fp.db.(worldstate.TransactionDB)
+				if !ok {
+					persistErr = fmt.Errorf("primary wait persistence requires transactional database")
+				} else {
+					persistErr = worldstate.RegisterPrimaryAskWait(
+						ctx, db, fp.flowID, chainID, toolCall.ID, chain, durationDelta,
+					)
+				}
+			} else {
+				persistErr = fp.updateMsgChain(ctx, chainID, chain, durationDelta)
+			}
+			if persistErr != nil {
+				logger.WithError(persistErr).Error("failed to update msg chain")
+				return persistErr
 			}
 
 			if executor.IsBarrierFunction(funcName) {
@@ -330,6 +347,7 @@ func (fp *flowProvider) execToolCall(
 		err      error
 		response string
 	)
+	ctx = tools.WithWorldStateChain(ctx, chainID)
 
 	for idx := 0; idx <= maxRetriesToCallFunction; idx++ {
 		if idx == maxRetriesToCallFunction {
@@ -504,11 +522,18 @@ func (fp *flowProvider) callWithRetries(
 			}
 		}
 
-		resp, err = fp.CallWithTools(ctx, optAgentType, chain, executor.Tools(), streamCb)
+		requestChain, worldStateView, prepareErr := fp.prepareWorldStateRequest(ctx, chain)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		resp, err = fp.CallWithTools(ctx, optAgentType, requestChain, executor.Tools(), streamCb)
 		if err == nil {
 			err = fillResult(resp)
 		}
 		if err == nil {
+			if ackErr := fp.acknowledgeWorldStateRequest(ctx, optAgentType, chainID, worldStateView); ackErr != nil {
+				logger.WithError(ackErr).Warn("failed to acknowledge World State request revision")
+			}
 			break
 		} else {
 			errs = append(errs, err)

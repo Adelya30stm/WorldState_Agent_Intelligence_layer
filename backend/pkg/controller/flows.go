@@ -14,6 +14,7 @@ import (
 	"pentagi/pkg/providers"
 	"pentagi/pkg/providers/provider"
 	"pentagi/pkg/tools"
+	"pentagi/pkg/worldstate"
 
 	"github.com/sirupsen/logrus"
 )
@@ -51,20 +52,21 @@ type FlowController interface {
 }
 
 type flowController struct {
-	db     database.Querier
-	mx     *sync.Mutex
-	cfg    *config.Config
-	flows  map[int64]FlowWorker
-	docker docker.DockerClient
-	provs  providers.ProviderController
-	subs   subscriptions.SubscriptionsController
-	alc    AgentLogController
-	mlc    MsgLogController
-	aslc   AssistantLogController
-	slc    SearchLogController
-	tlc    TermLogController
-	vslc   VectorStoreLogController
-	sc     ScreenshotController
+	db       database.Querier
+	mx       *sync.Mutex
+	cfg      *config.Config
+	flows    map[int64]FlowWorker
+	docker   docker.DockerClient
+	provs    providers.ProviderController
+	subs     subscriptions.SubscriptionsController
+	alc      AgentLogController
+	mlc      MsgLogController
+	aslc     AssistantLogController
+	slc      SearchLogController
+	tlc      TermLogController
+	vslc     VectorStoreLogController
+	sc       ScreenshotController
+	wakeOnce sync.Once
 }
 
 func NewFlowController(
@@ -127,7 +129,24 @@ func (fc *flowController) LoadFlows(ctx context.Context) error {
 		fc.flows[flow.ID] = fw
 	}
 
+	if db, ok := fc.db.(worldstate.TransactionDB); ok {
+		fc.wakeOnce.Do(func() {
+			dispatcher := worldstate.NewPrimaryWaitDispatcher(db, fc.resumePrimaryWorldStateWait)
+			go dispatcher.Run(ctx)
+		})
+	}
+
 	return nil
+}
+
+func (fc *flowController) resumePrimaryWorldStateWait(ctx context.Context, wait database.AgentChainWait) error {
+	fc.mx.Lock()
+	flow, ok := fc.flows[wait.FlowID]
+	fc.mx.Unlock()
+	if !ok {
+		return ErrFlowNotFound
+	}
+	return flow.ResumePrimaryWait(ctx, wait)
 }
 
 func (fc *flowController) CreateFlow(
@@ -169,6 +188,39 @@ func (fc *flowController) CreateFlow(
 	}
 
 	fc.flows[fw.GetFlowID()] = fw
+
+	// Keep assistant mode available for every new flow by default.
+	aw, err := NewAssistantWorker(ctx, newAssistantWorkerCtx{
+		userID:    userID,
+		flowID:    fw.GetFlowID(),
+		input:     input,
+		useAgents: true,
+		prvname:   prvname,
+		prvtype:   prvtype,
+		functions: functions,
+		flowWorkerCtx: flowWorkerCtx{
+			db:     fc.db,
+			cfg:    fc.cfg,
+			docker: fc.docker,
+			provs:  fc.provs,
+			subs:   fc.subs,
+			flowProviderControllers: flowProviderControllers{
+				mlc:  fc.mlc,
+				aslc: fc.aslc,
+				alc:  fc.alc,
+				slc:  fc.slc,
+				tlc:  fc.tlc,
+				vslc: fc.vslc,
+				sc:   fc.sc,
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create default assistant for flow: %w", err)
+	}
+	if err = fw.AddAssistant(ctx, aw); err != nil {
+		return nil, fmt.Errorf("failed to attach default assistant to flow: %w", err)
+	}
 
 	return fw, nil
 }

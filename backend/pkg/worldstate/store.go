@@ -10,21 +10,29 @@ import (
 	"pentagi/pkg/database"
 )
 
-// Store persists World State entities and enforces lifecycle transitions.
-type Store struct {
-	db database.Querier
-}
-
-func NewStore(db database.Querier) *Store {
-	return &Store{db: db}
-}
-
 var emptyObject = json.RawMessage(`{}`)
 var emptyArray = json.RawMessage(`[]`)
 
-// Observe ensures an entity exists for (flowID, type, key).
-// New entities are created as unknown then transitioned to discovered.
-// Existing entities only merge properties; state changes go through Transition.
+// PostCommitHint optionally nudges a scanner after durable state is visible.
+type PostCommitHint func(context.Context, int64) error
+
+type transactionalQuerier interface {
+	database.Querier
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	WithTx(*sql.Tx) *database.Queries
+}
+
+// Store persists World State mutations and their ordered journal facts.
+type Store struct {
+	db    database.Querier
+	hints []PostCommitHint
+}
+
+func NewStore(db database.Querier, hints ...PostCommitHint) *Store {
+	return &Store{db: db, hints: hints}
+}
+
+// Observe ensures an entity exists and atomically journals meaningful changes.
 func (s *Store) Observe(
 	ctx context.Context,
 	flowID int64,
@@ -34,61 +42,72 @@ func (s *Store) Observe(
 	properties map[string]any,
 	evidence map[string]any,
 ) (database.WorldStateEntity, error) {
-	if entityKey == "" || entityType == "" {
-		return database.WorldStateEntity{}, fmt.Errorf("worldstate: empty entity type or key")
+	if flowID <= 0 || entityKey == "" || entityType == "" {
+		return database.WorldStateEntity{}, fmt.Errorf("worldstate: invalid flow, entity type, or key")
 	}
-
-	props, err := marshalJSON(properties)
+	entityKey = safeEntityKey(entityKey)
+	safeProperties, props, err := safePropertyMap(properties)
 	if err != nil {
 		return database.WorldStateEntity{}, err
 	}
-	ev, err := marshalJSON(evidence)
+	if evidence == nil {
+		evidence = map[string]any{}
+	}
+	safeEvidence, err := marshalSafeJSON(evidence)
 	if err != nil {
 		return database.WorldStateEntity{}, err
 	}
+	agent = normalizedAgent(agent)
 
-	existing, err := s.db.GetWorldStateEntityByKey(ctx, database.GetWorldStateEntityByKeyParams{
-		FlowID:    flowID,
-		EntityKey: entityKey,
-	})
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return database.WorldStateEntity{}, fmt.Errorf("worldstate: get entity: %w", err)
-	}
-
-	if errors.Is(err, sql.ErrNoRows) {
-		created, err := s.db.UpsertWorldStateEntity(ctx, database.UpsertWorldStateEntityParams{
-			FlowID:      flowID,
-			EntityKey:   entityKey,
-			Type:        entityType,
-			State:       database.WorldStateLifecycleUnknown,
-			Properties:  props,
-			Annotations: emptyArray,
-		})
+	var result database.WorldStateEntity
+	meaningful := false
+	err = s.withTx(ctx, func(q *database.Queries) error {
+		entity, created, err := lockOrInsertEntity(ctx, q, flowID, entityType, entityKey, props)
 		if err != nil {
-			return database.WorldStateEntity{}, fmt.Errorf("worldstate: create entity: %w", err)
+			return err
 		}
-		return s.transitionLoaded(ctx, created, StateDiscovered, agent, ev)
-	}
-
-	updated, err := s.db.UpsertWorldStateEntity(ctx, database.UpsertWorldStateEntityParams{
-		FlowID:      flowID,
-		EntityKey:   entityKey,
-		Type:        entityType,
-		State:       existing.State,
-		Properties:  props,
-		Annotations: emptyArray,
+		if created {
+			meaningful = true
+			if err := createEntityEvent(ctx, q, entity, agent, true, safeProperties); err != nil {
+				return err
+			}
+		} else {
+			changes, err := changedProperties(entity.Properties, safeProperties)
+			if err != nil {
+				return err
+			}
+			if len(changes) != 0 {
+				entity, err = q.MergeWorldStateEntityProperties(ctx, database.MergeWorldStateEntityPropertiesParams{
+					Properties: props,
+					ID:         entity.ID,
+				})
+				if err != nil {
+					return fmt.Errorf("worldstate: merge entity: %w", err)
+				}
+				meaningful = true
+				if err := createEntityEvent(ctx, q, entity, agent, false, changes); err != nil {
+					return err
+				}
+			}
+		}
+		if State(entity.State) == StateUnknown {
+			entity, err = transitionLoaded(ctx, q, entity, StateDiscovered, agent, safeEvidence)
+			if err != nil {
+				return err
+			}
+			meaningful = true
+		}
+		result = entity
+		return nil
 	})
 	if err != nil {
-		return database.WorldStateEntity{}, fmt.Errorf("worldstate: merge entity: %w", err)
+		return database.WorldStateEntity{}, err
 	}
-
-	if State(updated.State) == StateUnknown {
-		return s.transitionLoaded(ctx, updated, StateDiscovered, agent, ev)
-	}
-	return updated, nil
+	s.postCommit(ctx, flowID, meaningful)
+	return result, nil
 }
 
-// Transition moves an entity along the lifecycle FSM and appends an audit row.
+// Transition locks and revalidates the lifecycle edge before writing audit and journal rows.
 func (s *Store) Transition(
 	ctx context.Context,
 	entityID int64,
@@ -96,15 +115,30 @@ func (s *Store) Transition(
 	agent string,
 	evidence json.RawMessage,
 ) (database.WorldStateEntity, error) {
-	entity, err := s.db.GetWorldStateEntityByID(ctx, entityID)
+	safeEvidence, err := redactRawJSON(evidence)
 	if err != nil {
-		return database.WorldStateEntity{}, fmt.Errorf("worldstate: load entity %d: %w", entityID, err)
+		return database.WorldStateEntity{}, err
 	}
-	return s.transitionLoaded(ctx, entity, to, agent, evidence)
+	agent = normalizedAgent(agent)
+	var result database.WorldStateEntity
+	err = s.withTx(ctx, func(q *database.Queries) error {
+		entity, err := q.LockWorldStateEntityByID(ctx, entityID)
+		if err != nil {
+			return fmt.Errorf("worldstate: lock entity %d: %w", entityID, err)
+		}
+		result, err = transitionLoaded(ctx, q, entity, to, agent, safeEvidence)
+		return err
+	})
+	if err != nil {
+		return database.WorldStateEntity{}, err
+	}
+	s.postCommit(ctx, result.FlowID, true)
+	return result, nil
 }
 
-func (s *Store) transitionLoaded(
+func transitionLoaded(
 	ctx context.Context,
+	q *database.Queries,
 	entity database.WorldStateEntity,
 	to State,
 	agent string,
@@ -114,37 +148,34 @@ func (s *Store) transitionLoaded(
 	if err := ValidateTransition(from, to); err != nil {
 		return database.WorldStateEntity{}, err
 	}
-	if evidence == nil {
-		evidence = emptyObject
-	}
-	if agent == "" {
-		agent = AgentSystem
-	}
-
-	if _, err := s.db.CreateWorldStateTransition(ctx, database.CreateWorldStateTransitionParams{
-		EntityID:  entity.ID,
-		FromState: database.WorldStateLifecycle(from),
-		ToState:   database.WorldStateLifecycle(to),
-		Agent:     agent,
-		Evidence:  evidence,
+	if _, err := q.CreateWorldStateTransition(ctx, database.CreateWorldStateTransitionParams{
+		EntityID: entity.ID, FromState: entity.State, ToState: database.WorldStateLifecycle(to),
+		Agent: agent, Evidence: evidence,
 	}); err != nil {
 		return database.WorldStateEntity{}, fmt.Errorf("worldstate: write transition: %w", err)
 	}
-
-	updated, err := s.db.UpdateWorldStateEntityState(ctx, database.UpdateWorldStateEntityStateParams{
-		State: database.WorldStateLifecycle(to),
-		ID:    entity.ID,
+	updated, err := q.UpdateWorldStateEntityState(ctx, database.UpdateWorldStateEntityStateParams{
+		State: database.WorldStateLifecycle(to), ID: entity.ID,
 	})
 	if err != nil {
 		return database.WorldStateEntity{}, fmt.Errorf("worldstate: update state: %w", err)
 	}
+	facts := map[string]any{
+		"entity_id": entity.ID, "entity_key": entity.EntityKey, "entity_type": entity.Type,
+		"from_state": from, "to_state": to,
+	}
+	if err := createEvent(ctx, q, entity.FlowID, database.WorldStateEventKindEntityTransitioned, agent, facts); err != nil {
+		return database.WorldStateEntity{}, err
+	}
 	return updated, nil
 }
 
-// PromoteScanning moves discovered → scanning when active enumeration starts.
-// No-op (nil error) if the transition is not allowed from the current state.
+// PromoteScanning is an idempotent discovered-to-scanning promotion.
 func (s *Store) PromoteScanning(ctx context.Context, entityID int64, agent string, evidence map[string]any) error {
-	ev, err := marshalJSON(evidence)
+	if evidence == nil {
+		evidence = map[string]any{}
+	}
+	ev, err := marshalSafeJSON(evidence)
 	if err != nil {
 		return err
 	}
@@ -155,33 +186,101 @@ func (s *Store) PromoteScanning(ctx context.Context, entityID int64, agent strin
 	return err
 }
 
-// Link upserts a typed edge between two entities in the same flow.
+// Link locks endpoints and the logical edge before atomically merging and journalling it.
 func (s *Store) Link(
 	ctx context.Context,
 	flowID, sourceID, targetID int64,
 	linkType string,
 	properties map[string]any,
 ) (database.WorldStateLink, error) {
-	props, err := marshalJSON(properties)
+	if flowID <= 0 || sourceID <= 0 || targetID <= 0 || linkType == "" {
+		return database.WorldStateLink{}, fmt.Errorf("worldstate: invalid link")
+	}
+	safeProperties, props, err := safePropertyMap(properties)
 	if err != nil {
 		return database.WorldStateLink{}, err
 	}
-	return s.db.UpsertWorldStateLink(ctx, database.UpsertWorldStateLinkParams{
-		FlowID:     flowID,
-		SourceID:   sourceID,
-		TargetID:   targetID,
-		Type:       linkType,
-		Properties: props,
+	var result database.WorldStateLink
+	meaningful := false
+	err = s.withTx(ctx, func(q *database.Queries) error {
+		source, target, err := lockLinkEndpoints(ctx, q, flowID, sourceID, targetID)
+		if err != nil {
+			return err
+		}
+		link, created, err := lockOrInsertLink(ctx, q, flowID, sourceID, targetID, linkType, props)
+		if err != nil {
+			return err
+		}
+		changes := safeProperties
+		if !created {
+			changes, err = changedProperties(link.Properties, safeProperties)
+			if err != nil {
+				return err
+			}
+			if len(changes) != 0 {
+				link, err = q.MergeWorldStateLinkProperties(ctx, database.MergeWorldStateLinkPropertiesParams{
+					Properties: props, ID: link.ID,
+				})
+				if err != nil {
+					return fmt.Errorf("worldstate: merge link: %w", err)
+				}
+			}
+		}
+		meaningful = created || len(changes) != 0
+		if meaningful {
+			facts := map[string]any{
+				"link_id": link.ID, "link_type": link.Type, "created": created,
+				"source_id": source.ID, "source_key": source.EntityKey,
+				"target_id": target.ID, "target_key": target.EntityKey,
+				"properties": changes,
+			}
+			if err := createEvent(ctx, q, flowID, database.WorldStateEventKindLinkUpserted, AgentSystem, facts); err != nil {
+				return err
+			}
+		}
+		result = link
+		return nil
 	})
+	if err != nil {
+		return database.WorldStateLink{}, err
+	}
+	s.postCommit(ctx, flowID, meaningful)
+	return result, nil
 }
 
-func marshalJSON(v map[string]any) (json.RawMessage, error) {
-	if v == nil {
-		return emptyObject, nil
+func (s *Store) withTx(ctx context.Context, fn func(*database.Queries) error) error {
+	db, ok := s.db.(transactionalQuerier)
+	if !ok {
+		return fmt.Errorf("worldstate: database does not support transactions")
 	}
-	b, err := json.Marshal(v)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("worldstate: marshal json: %w", err)
+		return fmt.Errorf("worldstate: begin transaction: %w", err)
 	}
-	return b, nil
+	if err := fn(db.WithTx(tx)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("worldstate: commit transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) postCommit(ctx context.Context, flowID int64, meaningful bool) {
+	if !meaningful {
+		return
+	}
+	for _, hint := range s.hints {
+		if hint != nil {
+			_ = hint(context.WithoutCancel(ctx), flowID)
+		}
+	}
+}
+
+func normalizedAgent(agent string) string {
+	if agent == "" {
+		return AgentSystem
+	}
+	return agent
 }
