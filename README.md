@@ -8,6 +8,17 @@ However, the World State architecture is not conceptually tied to PentAGI: any a
 
 World State is still a persistent structured representation of the pentest environment. It is also an event-driven control loop: committed mutations become ordered revisions, those revisions are delivered only to the primary agent, and the planner chooses the next action from that evidence.
 
+## Run environment
+
+Qualitative analysis of agent executions used this stack, not a synthetic trace replay.
+
+| Item | Value |
+|---|---|
+| **Target** | Authorized black-box web pentest of a production HTTPS consumer application (origin plus in-scope hostnames). The site name is omitted. |
+| **Primary Agent** | OpenAI `gpt-5.4-mini` on Chat Completions (`backend/pkg/providers/openai/config.yml`). |
+| **Primary settings** | `max_tokens: 16384`, `reasoning.effort: none` (required for function tools on this model). No `temperature` / `top_p` on this slot; those apply to non-reasoning helpers such as `searcher` (`temperature: 0.7`, `top_p: 0.8`). |
+| **Engagements** | Two live flows on 6 September 2026 against that target. **Flow 16** stopped on the first Primary Agent call before any tool ran. **Flow 17** ran tools and World State ingest for on the order of hours until the planner `done` gate. |
+
 <p align="center">
   <img src="./docs/images/agent-world-state.png" alt="Penetration Testing — Agent World State" width="100%">
 </p>

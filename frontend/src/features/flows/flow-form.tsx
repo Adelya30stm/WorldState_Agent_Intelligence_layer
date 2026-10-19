@@ -14,6 +14,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Form, FormControl, FormField, FormLabel } from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
 import {
     InputGroup,
     InputGroupAddon,
@@ -31,6 +32,7 @@ const formSchema = z.object({
     message: z.string().trim().min(1, { message: 'Message cannot be empty' }),
     providerName: z.string().trim().min(1, { message: 'Provider must be selected' }),
     useAgents: z.boolean(),
+    scopeDomains: z.string().optional(),
 });
 
 export interface FlowFormProps {
@@ -43,6 +45,7 @@ export interface FlowFormProps {
     onCancel?: () => Promise<void> | void;
     onSubmit: (values: FlowFormValues) => Promise<void> | void;
     placeholder?: string;
+    showScope?: boolean;
     type: 'assistant' | 'automation';
 }
 
@@ -58,6 +61,7 @@ export const FlowForm = ({
     onCancel,
     onSubmit,
     placeholder = 'Describe what you would like to test...',
+    showScope = false,
     type,
 }: FlowFormProps) => {
     const { providers, setSelectedProvider } = useProviders();
@@ -82,6 +86,7 @@ export const FlowForm = ({
             message: defaultValues?.message ?? '',
             providerName: defaultValues?.providerName ?? '',
             useAgents: defaultValues?.useAgents ?? false,
+            scopeDomains: defaultValues?.scopeDomains ?? '',
         },
         mode: 'onChange',
         resolver: zodResolver(formSchema),
@@ -340,6 +345,27 @@ export const FlowForm = ({
                         </FormControl>
                     )}
                 />
+                {showScope && (
+                    <FormField
+                        control={control}
+                        name="scopeDomains"
+                        render={({ field }) => (
+                            <div className="mt-3">
+                                <FormLabel className="text-xs font-normal text-muted-foreground">
+                                    In scope (domains, comma-separated)
+                                </FormLabel>
+                                <FormControl>
+                                    <Input
+                                        {...field}
+                                        className="mt-1"
+                                        disabled={isFormDisabled}
+                                        placeholder="mokka.ru, shop.mokka.ru"
+                                    />
+                                </FormControl>
+                            </div>
+                        )}
+                    />
+                )}
             </form>
         </Form>
     );

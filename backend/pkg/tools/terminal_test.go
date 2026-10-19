@@ -193,9 +193,9 @@ func TestPrimaryTerminalName(t *testing.T) {
 		flowID int64
 		want   string
 	}{
-		{1, "pentagi-terminal-1"},
-		{0, "pentagi-terminal-0"},
-		{12345, "pentagi-terminal-12345"},
+		{1, "redscope-terminal-1"},
+		{0, "redscope-terminal-0"},
+		{12345, "redscope-terminal-12345"},
 	}
 
 	for _, tt := range tests {

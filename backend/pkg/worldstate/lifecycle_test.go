@@ -26,8 +26,8 @@ func TestValidateTransition_HappyPath(t *testing.T) {
 func TestValidateTransition_RejectsSkipAhead(t *testing.T) {
 	// Skipping forward is the most common bug shape we need to reject.
 	cases := []struct{ from, to State }{
-		{StateUnknown, StateScanning},   // recon not done
-		{StateUnknown, StateExploited},  // no chain
+		{StateUnknown, StateScanning},  // recon not done
+		{StateUnknown, StateExploited}, // no chain
 		{StateDiscovered, StateExploited},
 		{StateScanning, StateExploited},
 		{StateAssessed, StateExploited}, // must pass through vulnerable
@@ -65,8 +65,8 @@ func TestValidateTransition_RejectsSameState(t *testing.T) {
 func TestValidateTransition_AllowedShortcuts(t *testing.T) {
 	// These edges exist intentionally — see allowedTransitions for the why.
 	allowed := []struct{ from, to State }{
-		{StateDiscovered, StateAssessed}, // passive recon was enough
-		{StateAssessed, StateRemediated}, // clean target, nothing to exploit
+		{StateDiscovered, StateAssessed},   // passive recon was enough
+		{StateAssessed, StateRemediated},   // clean target, nothing to exploit
 		{StateVulnerable, StateRemediated}, // patched before exploit
 	}
 	for _, c := range allowed {

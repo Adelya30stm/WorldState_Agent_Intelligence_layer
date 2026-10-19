@@ -31,10 +31,10 @@ export const ProvidersProvider = ({ children }: ProvidersProviderProps) => {
     const providers = sortProviders(providersData?.providers || []);
 
     // Store selected provider name instead of the provider object.
-    // Default to OpenAI; migrate away from a previously saved Anthropic default.
+    // Default to OpenAI. Anthropic stays selectable (second in the list).
     const [selectedProviderName, setSelectedProviderName] = useState<null | string>(() => {
         const saved = localStorage.getItem(SELECTED_PROVIDER_KEY);
-        if (!saved || saved === 'anthropic') {
+        if (!saved) {
             return 'openai';
         }
         return saved;

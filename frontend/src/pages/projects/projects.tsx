@@ -658,9 +658,11 @@ interface PhaseCardProps {
     phase: PentestPhase;
     scopeItems?: string[];
     onScopeChange?: (items: string[]) => void;
+    target?: string;
+    onTargetChange?: (v: string) => void;
 }
 
-const PhaseCard = ({ cookies, disabled, launchLabel, onAutofill, onCookiesChange, onLaunch, phase, scopeItems, onScopeChange }: PhaseCardProps) => {
+const PhaseCard = ({ cookies, disabled, launchLabel, onAutofill, onCookiesChange, onLaunch, phase, scopeItems, onScopeChange, target, onTargetChange }: PhaseCardProps) => {
     const [afText, setAfText] = useState('');
     const [afLoading, setAfLoading] = useState(false);
     const [afError, setAfError] = useState('');
@@ -753,6 +755,17 @@ const PhaseCard = ({ cookies, disabled, launchLabel, onAutofill, onCookiesChange
             </div>
 
             {/* Extra inputs */}
+            {phase.id !== 'planning' && onTargetChange && (
+                <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2 py-1.5">
+                    <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                    <Input
+                        className="h-6 border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
+                        placeholder="Target: domain, IP, URL…"
+                        value={target ?? ''}
+                        onChange={(e) => onTargetChange(e.target.value)}
+                    />
+                </div>
+            )}
             {phase.id === 'planning' && onScopeChange && (
                 <ScopeTagInput items={scopeItems ?? []} onChange={onScopeChange} />
             )}
@@ -1413,6 +1426,7 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
     const [target, setTarget] = useState('');
     const [cookies, setCookies] = useState('');
     const [planningScope, setPlanningScope] = useState<string[]>([]);
+    const [phaseTargets, setPhaseTargets] = useState<Record<string, string>>({});
     const [showPlanning, setShowPlanning] = useState(false);
 
     // Extract phase inputs (target, scope list, session cookies) from pasted
@@ -1432,9 +1446,8 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
         if (d?.cookies?.trim()) setCookies(d.cookies.trim());
     };
 
-    const handleLaunch = (phase: PentestPhase) => {
-        const t = target.trim();
-        if (!t) return;
+    const handleLaunch = (phase: PentestPhase, explicitTarget?: string) => {
+        const t = (explicitTarget ?? target).trim() || 'the target application';
         let promptText = phase.prompt(t);
         if (phase.id === 'planning' && planningScope.length > 0) {
             promptText += ` The scope includes the following targets: ${planningScope.join(', ')}.`;
@@ -1447,8 +1460,6 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
         }
         navigate(`/flows/new?prompt=${encodeURIComponent(promptText)}`);
     };
-
-    const noTarget = !target.trim();;
 
     return (
         <>
@@ -1525,20 +1536,25 @@ const WebPentest = ({ mode = 'dashboard' }: { mode?: 'dashboard' | 'phases' | 'c
 
                         {/* Phase grid */}
                         <div className="grid grid-cols-2 gap-4 xl:grid-cols-3 2xl:grid-cols-4">
-                            {PHASE_METADATA.map((phase) => (
+                            {PHASE_METADATA.map((phase) => {
+                                const effectiveTarget = (phaseTargets[phase.id] || target).trim();
+                                return (
                                 <PhaseCard
-                                    key={phase.id}
-                                    phase={phase}
-                                    disabled={phase.id === 'planning' ? false : noTarget}
-                                    launchLabel={phase.id === 'planning' ? 'Open Planning' : undefined}
                                     cookies={phase.id === 'recon' || phase.id === 'auth-testing' ? cookies : undefined}
+                                    disabled={false}
+                                    key={phase.id}
+                                    launchLabel={phase.id === 'planning' ? 'Open Planning' : undefined}
                                     onAutofill={fillFromText}
                                     onCookiesChange={phase.id === 'recon' || phase.id === 'auth-testing' ? setCookies : undefined}
-                                    scopeItems={phase.id === 'planning' ? planningScope : undefined}
+                                    onLaunch={() => phase.id === 'planning' ? setShowPlanning(true) : handleLaunch(phase, effectiveTarget)}
                                     onScopeChange={phase.id === 'planning' ? setPlanningScope : undefined}
-                                    onLaunch={() => phase.id === 'planning' ? setShowPlanning(true) : handleLaunch(phase)}
+                                    onTargetChange={phase.id !== 'planning' ? (v) => setPhaseTargets((prev) => ({ ...prev, [phase.id]: v })) : undefined}
+                                    phase={phase}
+                                    scopeItems={phase.id === 'planning' ? planningScope : undefined}
+                                    target={phase.id !== 'planning' ? (phaseTargets[phase.id] ?? '') : undefined}
                                 />
-                            ))}
+                                );
+                            })}
                         </div>
                     </>
                 )}

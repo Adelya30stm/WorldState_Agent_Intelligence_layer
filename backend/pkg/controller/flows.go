@@ -189,6 +189,39 @@ func (fc *flowController) CreateFlow(
 
 	fc.flows[fw.GetFlowID()] = fw
 
+	// Keep assistant mode available for every new flow by default.
+	aw, err := NewAssistantWorker(ctx, newAssistantWorkerCtx{
+		userID:    userID,
+		flowID:    fw.GetFlowID(),
+		input:     input,
+		useAgents: true,
+		prvname:   prvname,
+		prvtype:   prvtype,
+		functions: functions,
+		flowWorkerCtx: flowWorkerCtx{
+			db:     fc.db,
+			cfg:    fc.cfg,
+			docker: fc.docker,
+			provs:  fc.provs,
+			subs:   fc.subs,
+			flowProviderControllers: flowProviderControllers{
+				mlc:  fc.mlc,
+				aslc: fc.aslc,
+				alc:  fc.alc,
+				slc:  fc.slc,
+				tlc:  fc.tlc,
+				vslc: fc.vslc,
+				sc:   fc.sc,
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create default assistant for flow: %w", err)
+	}
+	if err = fw.AddAssistant(ctx, aw); err != nil {
+		return nil, fmt.Errorf("failed to attach default assistant to flow: %w", err)
+	}
+
 	return fw, nil
 }
 

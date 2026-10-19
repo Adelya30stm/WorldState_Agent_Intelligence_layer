@@ -171,7 +171,7 @@ func (b *PlannerEvidenceBuilder) build(ctx context.Context, reader PrimaryDelive
 	evidence := PlannerEvidence{
 		FlowID: flowID, CapturedHead: head,
 		Projection: plannerEvidenceProjection(projection, b.limits),
-		Journal: PlannerEvidenceJournal{AfterRevision: after, ThroughRevision: head},
+		Journal:    PlannerEvidenceJournal{AfterRevision: after, ThroughRevision: head},
 	}
 	for _, event := range rendered {
 		if safe, ok := plannerEvidenceEvent(event); ok {

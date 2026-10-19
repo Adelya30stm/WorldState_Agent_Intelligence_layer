@@ -641,8 +641,7 @@ const InfrastructurePentest = () => {
     const [scopeItems, setScopeItems] = useState<string[]>([]);
 
     const handleLaunch = (phase: InfraPhase) => {
-        const t = target.trim();
-        if (!t) return;
+        const t = target.trim() || 'the in-scope environment';
         let promptText = phase.prompt(t);
         if (phase.id === 'scoping' && scopeItems.length > 0) {
             promptText += ` The scope includes the following targets: ${scopeItems.join(', ')}.`;
@@ -652,8 +651,6 @@ const InfrastructurePentest = () => {
         }
         navigate(`/flows/new?prompt=${encodeURIComponent(promptText)}`);
     };
-
-    const noTarget = !target.trim();
 
     return (
         <>
@@ -705,7 +702,7 @@ const InfrastructurePentest = () => {
                     {PHASES.map((phase) => (
                         <PhaseCard
                             credentials={credentials}
-                            disabled={noTarget}
+                            disabled={false}
                             key={phase.id}
                             phase={phase}
                             scopeItems={phase.id === 'scoping' ? scopeItems : undefined}

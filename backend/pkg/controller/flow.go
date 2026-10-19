@@ -21,6 +21,7 @@ import (
 	"pentagi/pkg/providers/provider"
 	"pentagi/pkg/templates"
 	"pentagi/pkg/tools"
+	"pentagi/pkg/worldstate"
 
 	"github.com/sirupsen/logrus"
 )
@@ -139,6 +140,12 @@ func NewFlowWorker(
 		"provider_type": fwc.prvtype.String(),
 	})
 	logger.Info("flow created in DB")
+
+	if scope := worldstate.ParseScopeFromInput(fwc.input); !scope.Empty() {
+		if err := worldstate.SaveScope(ctx, fwc.db, flow.ID, scope); err != nil {
+			logger.WithError(err).Warn("failed to persist world state scope")
+		}
+	}
 
 	user, err := fwc.db.GetUser(ctx, fwc.userID)
 	if err != nil {

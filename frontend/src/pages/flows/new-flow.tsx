@@ -17,12 +17,15 @@ const NewFlow = () => {
     const { createFlow, createFlowWithAssistant } = useFlows();
     const { settings } = useSystemSettings();
 
-    const [isLoading, setIsLoading] = useState(false);
-    const [flowType, setFlowType] = useState<'assistant' | 'automation'>('automation');
-
-    // Auto-submit when ?prompt= is provided (e.g. from Projects page)
+    // Auto-submit when ?prompt= is provided (e.g. from Phases / Planning)
     const autoPrompt = searchParams.get('prompt');
     const autoSubmittedRef = useRef(false);
+
+    const [isLoading, setIsLoading] = useState(false);
+    // Phase launches must start in assistant mode so use_agents runs.
+    const [flowType, setFlowType] = useState<'assistant' | 'automation'>(
+        autoPrompt ? 'assistant' : 'automation',
+    );
 
     // Calculate default useAgents value (only for assistant type)
     const shouldUseAgents = useMemo(() => {
@@ -44,24 +47,24 @@ const NewFlow = () => {
                 if (webPentestTarget) {
                     localStorage.setItem('webPentestFlow', JSON.stringify({ flowId, target: webPentestTarget }));
                 }
-                navigate(`/flows/${flowId}?tab=${flowType}`);
+                navigate(`/flows/${flowId}?tab=${flowType}&confirmScope=1`);
             }
         } finally {
             setIsLoading(false);
         }
     };
 
-    // Auto-submit if ?prompt= is in the URL (launched from Projects page)
+    // Auto-submit if ?prompt= is in the URL (launched from Phases / Planning)
     useEffect(() => {
         if (!autoPrompt || autoSubmittedRef.current || isLoading || !selectedProvider) return;
         autoSubmittedRef.current = true;
         handleSubmit({
             message: autoPrompt,
             providerName: selectedProvider.name,
-            useAgents: shouldUseAgents,
+            useAgents: true,
         });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [autoPrompt, selectedProvider, shouldUseAgents]);
+    }, [autoPrompt, selectedProvider]);
 
     // When launched with ?prompt= (e.g. from Planning / Phases), skip the form UI entirely
     if (autoPrompt) {
@@ -118,6 +121,7 @@ const NewFlow = () => {
                                 message: '',
                                 providerName: selectedProvider?.name ?? '',
                                 useAgents: shouldUseAgents,
+                                scopeDomains: '',
                             }}
                             isSubmitting={isLoading}
                             onSubmit={handleSubmit}
@@ -128,6 +132,7 @@ const NewFlow = () => {
                                         : 'What would you like me to help you with?'
                                     : 'Creating a new flow...'
                             }
+                            showScope
                             type={flowType}
                         />
                     </CardContent>

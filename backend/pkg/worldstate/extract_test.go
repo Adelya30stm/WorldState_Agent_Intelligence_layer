@@ -49,9 +49,9 @@ PORT     STATE SERVICE
 `
 	cands := ExtractCandidates("terminal", result)
 	want := map[string]bool{
-		"host:10.0.0.5":               false,
-		"service:10.0.0.5:22/tcp":     false,
-		"service:10.0.0.5:445/tcp":    false,
+		"host:10.0.0.5":            false,
+		"service:10.0.0.5:22/tcp":  false,
+		"service:10.0.0.5:445/tcp": false,
 	}
 	for _, c := range cands {
 		if _, ok := want[c.Key]; ok {
@@ -207,5 +207,79 @@ func TestIngestionFailureFieldsSanitizeCredentialIdentifiers(t *testing.T) {
 	fields := ingestionFailureFields(17, "credential:password:synthetic-password-sentinel", "terminal")
 	if fields["entity_key"] != "credential:password" {
 		t.Fatalf("unexpected ingestion entity key: %v", fields["entity_key"])
+	}
+}
+
+func TestExtractSkipsInfrastructureNoise(t *testing.T) {
+	result := `
+Get: http://http.kali.org/kali pool/main
+Hit: http://kali.download/kali
+https://download.docker.com/linux/debian
+https://discord.com/api
+https://ogp.me/ns
+https://ctlogs.dev/
+https://us.mirror.ionos.com/linux/distributions/kali/kali
+n.endswith css-j7o5z.fixed
+`
+	cands := ExtractCandidates("terminal", result)
+	for _, c := range cands {
+		switch {
+		case strings.Contains(c.Key, "kali"), strings.Contains(c.Key, "docker.com"),
+			strings.Contains(c.Key, "discord"), strings.Contains(c.Key, "ogp.me"),
+			strings.Contains(c.Key, "ctlogs"), strings.Contains(c.Key, "ionos"),
+			c.Key == "host:n.endswith", c.Key == "host:css-j7o5z.fixed":
+			t.Fatalf("infra/code noise leaked: %s", c.Key)
+		}
+	}
+}
+
+func TestExtractStripsEscapedURLJunk(t *testing.T) {
+	result := `{"url": "https://dh91a5qq5somh28whqwy.testapp.site/robots.txt.\\n"}`
+	cands := ExtractCandidates("terminal", result)
+	for _, c := range cands {
+		if strings.ContainsAny(c.Key, "\\\n") {
+			t.Fatalf("escaped junk in key: %q", c.Key)
+		}
+	}
+}
+
+func TestExtractSkipsRedactedCookieField(t *testing.T) {
+	cands := ExtractCandidates("terminal", `cookie: [REDACTED]
+cookie=[REDACTED]`)
+	for _, c := range cands {
+		if c.Type == EntityTypeCredential {
+			t.Fatalf("redacted cookie became credential: %+v", c)
+		}
+	}
+}
+
+func TestExtractBrowserSkipsDockerBridgeIP(t *testing.T) {
+	cands := ExtractCandidates("browser", `dial tcp 172.20.0.7:443: connect: connection refused`)
+	for _, c := range cands {
+		if c.Key == "host:172.20.0.7" {
+			t.Fatalf("docker bridge IP ingested from browser: %+v", keys(cands))
+		}
+	}
+}
+
+func TestExtractTerminalKeepsLabDockerRangeIP(t *testing.T) {
+	cands := ExtractCandidates("terminal", "ping 172.20.0.7")
+	saw := false
+	for _, c := range cands {
+		if c.Key == "host:172.20.0.7" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("expected lab IP from terminal, got %+v", keys(cands))
+	}
+}
+
+func TestSkipToolIngest(t *testing.T) {
+	if !skipToolIngest("world_state_query") || !skipToolIngest("file") || !skipToolIngest("duckduckgo") {
+		t.Fatal("expected query/file/search ingest to be skipped")
+	}
+	if skipToolIngest("terminal") || skipToolIngest("browser") {
+		t.Fatal("expected terminal/browser ingest to remain enabled")
 	}
 }

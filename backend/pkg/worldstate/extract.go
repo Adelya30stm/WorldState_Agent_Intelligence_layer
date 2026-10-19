@@ -38,18 +38,24 @@ var (
 
 var noiseHosts = map[string]bool{
 	"localhost": true, "example.com": true, "github.com": true,
-	"npmjs.com": true, "docker.io": true, "golang.org": true,
-	"pkg.go.dev": true, "ubuntu.com": true, "debian.org": true,
+	"npmjs.com": true, "docker.io": true, "docker.com": true,
+	"golang.org": true, "pkg.go.dev": true, "ubuntu.com": true,
+	"debian.org": true, "kali.org": true, "kali.download": true,
 	"symfony.com": true, "google.com": true, "googleapis.com": true,
 	"w3.org": true, "schema.org": true, "microsoft.com": true,
 	"cloudflare.com": true, "cdnjs.cloudflare.com": true,
 	"googletagmanager.com": true, "gstatic.com": true,
 	"jquery.com": true, "jqueryui.com": true, "api.jqueryui.com": true,
 	"builtwith.com": true, "crt.sh": true, "github.io": true,
+	"discord.com": true, "discord.gg": true, "ogp.me": true,
+	"ctlogs.dev": true, "merklemap.com": true, "dnstrack.net": true,
+	"mockapi.com": true, "mokapi.io": true,
 }
 
 var noiseHostSuffixes = []string{
 	".cloudfront.net", ".github.io", ".cloudflare.com",
+	".kali.org", ".docker.com", ".docker.io", ".discord.com",
+	".mirror.ionos.com", ".cdn-perfprod.com",
 }
 
 var fileExtTLDs = map[string]bool{
@@ -71,6 +77,8 @@ var codeHostSuffixes = map[string]bool{
 	"data": true, "status": true, "headers": true, "content": true,
 	"body": true, "params": true, "error": true, "result": true,
 	"response": true, "request": true, "handler": true, "method": true,
+	"endswith": true, "startswith": true, "includes": true, "contains": true,
+	"fixed": true,
 }
 
 // ExtractCandidates pulls hosts and endpoints from raw tool output.
@@ -89,13 +97,17 @@ func ExtractCandidates(toolName, result string) []Candidate {
 	}
 
 	for _, raw := range urlRE.FindAllString(safeResult, -1) {
-		raw = strings.TrimRight(raw, ".,;:)]}\"'>")
+		raw = cleanExtractedURL(raw)
 		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
+		if err != nil || u.Host == "" || u.Scheme == "" {
 			continue
 		}
-		host := canonicalHost(u.Hostname())
-		if host == "" || noiseHosts[host] {
+		hostName := u.Hostname()
+		if looksLikeDockerBridgeIP(hostName) && strings.EqualFold(toolName, "browser") {
+			continue
+		}
+		host := canonicalHost(hostName)
+		if host == "" {
 			continue
 		}
 		add(Candidate{
@@ -109,6 +121,9 @@ func ExtractCandidates(toolName, result string) []Candidate {
 		path := strings.TrimRight(u.Path, "/")
 		if path == "" {
 			path = "/"
+		}
+		if strings.ContainsAny(host+path, "\\\n\r") {
+			continue
 		}
 		epKey := "endpoint:" + strings.ToLower(u.Scheme) + "://" + host + path
 		add(Candidate{
@@ -124,7 +139,7 @@ func ExtractCandidates(toolName, result string) []Candidate {
 	}
 
 	for _, ip := range ipv4RE.FindAllString(safeResult, -1) {
-		if isNoiseIP(ip) {
+		if isNoiseIP(ip) || (looksLikeDockerBridgeIP(ip) && strings.EqualFold(toolName, "browser")) {
 			continue
 		}
 		add(Candidate{
@@ -270,13 +285,21 @@ func ExtractCandidates(toolName, result string) []Candidate {
 }
 
 func looksLikePlaceholder(s string) bool {
-	l := strings.ToLower(s)
-	for _, p := range []string{"***", "redacted", "null", "none", "password", "changeme", "{password}", "<password>"} {
+	l := strings.ToLower(strings.TrimSpace(s))
+	l = strings.Trim(l, `"'[]{}<>`)
+	for _, p := range []string{"***", "redacted", "null", "none", "password", "changeme", "placeholder"} {
 		if l == p {
 			return true
 		}
 	}
 	return false
+}
+
+func cleanExtractedURL(raw string) string {
+	if i := strings.IndexAny(raw, "\\\x00\n\r\t"); i >= 0 {
+		raw = raw[:i]
+	}
+	return strings.TrimRight(raw, ".,;:)]}\"'>")
 }
 
 func credentialFieldIdentity(field string) string {
@@ -489,6 +512,28 @@ func isNoiseIP(ip string) bool {
 		return true
 	}
 	return false
+}
+
+func looksLikeDockerBridgeIP(ip string) bool {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	var octets [4]int
+	for i, p := range parts {
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+			n = n*10 + int(c-'0')
+			if n > 255 {
+				return false
+			}
+		}
+		octets[i] = n
+	}
+	return octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31
 }
 
 func looksLikeReconTool(name string) bool {

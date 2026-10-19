@@ -20,6 +20,15 @@ import { Log } from '@/lib/log';
 
 export type Flow = FlowFragmentFragment;
 
+function flowInputFromValues(values: FlowFormValues): string {
+    const input = values.message.trim();
+    const domains = values.scopeDomains?.trim();
+    if (!domains) {
+        return input;
+    }
+    return `${input}\n\nredscope-scope: ${domains}`;
+}
+
 interface FlowsContextValue {
     createFlow: (values: FlowFormValues) => Promise<null | string>;
     createFlowWithAssistant: (values: FlowFormValues) => Promise<null | string>;
@@ -73,10 +82,8 @@ export const FlowsProvider = ({ children }: FlowsProviderProps) => {
 
     const createFlow = useCallback(
         async (values: FlowFormValues) => {
-            const { message, providerName } = values;
-
-            const input = message.trim();
-            const modelProvider = providerName.trim();
+            const input = flowInputFromValues(values);
+            const modelProvider = values.providerName.trim();
 
             if (!input || !modelProvider) {
                 return null;
@@ -110,10 +117,9 @@ export const FlowsProvider = ({ children }: FlowsProviderProps) => {
 
     const createFlowWithAssistant = useCallback(
         async (values: FlowFormValues) => {
-            const { message, providerName, useAgents } = values;
-
-            const input = message.trim();
-            const modelProvider = providerName.trim();
+            const input = flowInputFromValues(values);
+            const modelProvider = values.providerName.trim();
+            const useAgents = values.useAgents;
 
             if (!input || !modelProvider) {
                 return null;

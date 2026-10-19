@@ -16,10 +16,20 @@ func IngestToolResult(ctx context.Context, db database.Querier, flowID int64, to
 	if db == nil || flowID <= 0 || strings.TrimSpace(result) == "" {
 		return
 	}
+	if skipToolIngest(toolName) {
+		return
+	}
 
 	candidates := ExtractCandidates(toolName, result)
 	if len(candidates) == 0 {
 		return
+	}
+
+	scope, err := LoadScope(ctx, db, flowID)
+	if err != nil {
+		logrus.WithContext(ctx).WithError(err).WithField("flow_id", flowID).
+			Warn("worldstate: load scope failed; ingesting without scope filter")
+		scope = Scope{}
 	}
 
 	store := NewStore(db)
@@ -28,6 +38,17 @@ func IngestToolResult(ctx context.Context, db database.Querier, flowID int64, to
 	hostIDs := map[string]int64{}
 
 	for _, c := range candidates {
+		switch ClassifyCandidate(scope, c) {
+		case DecisionSkip:
+			continue
+		case DecisionGrey:
+			if err := InsertCandidate(ctx, db, flowID, c, CandidateReasonSimilar); err != nil {
+				logrus.WithContext(ctx).WithError(err).WithFields(ingestionFailureFields(flowID, c.Key, toolName)).
+					Warn("worldstate: candidate insert failed")
+			}
+			continue
+		}
+
 		entityKey := safeEntityKey(c.Key)
 		evidence := map[string]any{
 			"tool":   toolName,
@@ -98,5 +119,22 @@ func ingestionFailureFields(flowID int64, entityKey, toolName string) logrus.Fie
 		"flow_id":    flowID,
 		"entity_key": safeEntityKey(entityKey),
 		"tool":       toolName,
+	}
+}
+
+func skipToolIngest(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "world_state_query", "world_state_update",
+		"file", "maintenance", "maintenance_result",
+		"done", "ask", "subtask_list", "subtask_patch",
+		"memorist", "memorist_result",
+		"search_guide", "store_guide", "search_answer", "store_answer",
+		"search_code", "store_code", "search_in_memory",
+		"graphiti_search",
+		"google", "duckduckgo", "tavily", "traversaal", "perplexity", "searxng", "sploitus",
+		"search", "search_result":
+		return true
+	default:
+		return false
 	}
 }

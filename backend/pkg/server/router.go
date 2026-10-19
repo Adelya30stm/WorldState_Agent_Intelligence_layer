@@ -602,6 +602,10 @@ func setWorldStateGroup(parent *gin.RouterGroup, svc *services.WorldStateService
 		worldStateGroup.GET("/", svc.GetWorldState)
 		worldStateGroup.GET("/lifecycle", svc.GetLifecycle)
 		worldStateGroup.GET("/toolcalls", svc.GetToolCalls)
+		worldStateGroup.GET("/scope", svc.GetScope)
+		worldStateGroup.PUT("/scope", svc.PutScope)
+		worldStateGroup.GET("/candidates", svc.GetCandidates)
+		worldStateGroup.POST("/candidates/review", svc.ReviewCandidates)
 	}
 }
 

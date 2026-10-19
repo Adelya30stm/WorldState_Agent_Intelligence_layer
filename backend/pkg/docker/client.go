@@ -38,7 +38,7 @@ const (
 	containerLocalCwdTemplate   = "flow-%d"
 	containerPortsNumber        = 2
 	limitContainerPortsNumber   = 2000
-	primaryTerminalNamePrefix   = "pentagi-terminal-"
+	primaryTerminalNamePrefix   = "redscope-terminal-"
 )
 
 var (
@@ -101,26 +101,32 @@ func registerAllocatedPorts(flowID int64, ports []int) {
 	allocatedPorts[flowID] = slices.Clone(ports)
 }
 
+func portsAvailable(ports []int, used map[int]struct{}) bool {
+	for _, port := range ports {
+		if _, busy := used[port]; busy {
+			return false
+		}
+	}
+	return true
+}
+
 func choosePrimaryContainerPorts(flowID int64, used map[int]struct{}) []int {
 	allocatedPortsMu.Lock()
-	if ports := allocatedPorts[flowID]; len(ports) == containerPortsNumber {
-		allocatedPortsMu.Unlock()
-		return slices.Clone(ports)
-	}
+	cached := slices.Clone(allocatedPorts[flowID])
 	allocatedPortsMu.Unlock()
+	if len(cached) == containerPortsNumber && portsAvailable(cached, used) {
+		return cached
+	}
 
 	preferred := defaultPrimaryContainerPorts(flowID)
 	startDelta := preferred[0] - BaseContainerPortsNumber
 	for offset := 0; offset < limitContainerPortsNumber; offset += containerPortsNumber {
 		p0 := BaseContainerPortsNumber + (startDelta+offset)%limitContainerPortsNumber
 		p1 := p0 + 1
-		if _, busy := used[p0]; busy {
-			continue
-		}
-		if _, busy := used[p1]; busy {
-			continue
-		}
 		ports := []int{p0, p1}
+		if !portsAvailable(ports, used) {
+			continue
+		}
 		registerAllocatedPorts(flowID, ports)
 		return ports
 	}
@@ -131,14 +137,20 @@ func choosePrimaryContainerPorts(flowID int64, used map[int]struct{}) []int {
 
 func primaryTerminalFlowID(name string) (int64, bool) {
 	name = strings.TrimPrefix(name, "/")
-	if !strings.HasPrefix(name, primaryTerminalNamePrefix) {
-		return 0, false
+	// Longer legacy prefix first so pentagi-pentagi-terminal-N is not skipped.
+	// pentagi-terminal-N belongs to the other local PentAGI instance and must
+	// not hydrate this process's port cache.
+	for _, prefix := range []string{"pentagi-pentagi-terminal-", primaryTerminalNamePrefix} {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(name, prefix), 10, 64)
+		if err != nil || id < 0 {
+			return 0, false
+		}
+		return id, true
 	}
-	id, err := strconv.ParseInt(strings.TrimPrefix(name, primaryTerminalNamePrefix), 10, 64)
-	if err != nil || id < 0 {
-		return 0, false
-	}
-	return id, true
+	return 0, false
 }
 
 func NewDockerClient(ctx context.Context, db database.Querier, cfg *config.Config) (DockerClient, error) {
