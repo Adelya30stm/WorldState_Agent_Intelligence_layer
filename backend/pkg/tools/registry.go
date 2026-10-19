@@ -325,17 +325,22 @@ var registryDefinitions = map[string]llms.FunctionDefinition{
 		Name: WorldStateQueryToolName,
 		Description: "Function tool (not a shell command) that queries the authoritative World State store. " +
 			"Never invoke via terminal or a fake CLI. Call BEFORE choosing recon/exploit targets. " +
-			"Filter with type/types and state/states (e.g. states=[discovered,scanning] for remaining frontier work).",
+			"Model version 2 returns typed objects, checks and individual runs with computed statuses, parameters and evidence. " +
+			"Filter by object_id, check_id, kind, type or computed state; paginate objects and runs to compare similar experiments. " +
+			"A negative variant does not cancel a confirmed positive run. Model version 1 retains legacy entity/lifecycle output " +
+			"and can filter with type/types and state/states (e.g. states=[discovered,scanning] for remaining frontier work).",
 		Parameters: reflector.Reflect(&WorldStateQueryAction{}),
 	},
 	WorldStateUpdateToolName: {
 		Name: WorldStateUpdateToolName,
-		Description: "Function tool (not a shell command) that creates or updates World State entities. " +
-			"Never invoke via terminal, dummy binaries, or by writing /work logs. " +
-			"Pass entities (max 50) to promote many hosts/endpoints in one call. " +
-			"Lifecycle: unknown→discovered→scanning→assessed→vulnerable→exploited→remediated " +
-			"(discovered may skip to assessed; assessed/vulnerable may go to remediated; discovered→remediated is invalid). " +
-			"No ignored state — set properties.out_of_scope=true and to_state assessed for noise or leftover credentials.",
+		Description: "Function tool (not a shell command) that records World State observations. Never invoke via terminal. " +
+			"Model version 2 requires an operation: observe_object defines what is tested; ensure_check groups a kind such as XSS; " +
+			"start_run records concrete conditions BEFORE an actual terminal/browser experiment and returns run_id; " +
+			"finish_run saves the observed result and evidence for that run_id. This tool records experiments; it does not execute them. " +
+			"Each real repeat needs a new start_run call even with identical parameters; retry finish_run with the same run_id. " +
+			"Do not infer a confirmed vulnerability from a keyword or a reflected payload alone. " +
+			"Legacy model version 1 uses entity_key/type/to_state (or entities max 50) with valid one-step lifecycle transitions. " +
+			"No ignored state — set properties.out_of_scope=true and to_state assessed for noise.",
 		Parameters: reflector.Reflect(&WorldStateUpdateAction{}),
 	},
 	MemoristToolName: {

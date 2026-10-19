@@ -14,6 +14,7 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 export const api = {
     flows: () => req<Flow[]>('/flows/'),
     worldState: (flowId: string) => req<WorldStateResponse>(`/flows/${flowId}/worldstate`),
+    worldStateModel: (flowId: string, signal?: AbortSignal) => req<WorldStateModel>(`/flows/${flowId}/worldstate/model`, { signal }),
     lifecycle: (flowId: string) => req<LifecycleResponse>(`/flows/${flowId}/worldstate/lifecycle`),
     exec: (flowId: string, command: string) =>
         req<ExecResult>(`/flows/${flowId}/exec/`, { method: 'POST', body: JSON.stringify({ command }) }),
@@ -54,6 +55,47 @@ export interface WorldStateResponse {
     entities: WorldStateEntity[];
     links: WorldStateLink[];
     flowId: number;
+}
+
+export interface WorldStateModel {
+    schema_version: number;
+    flow_id: number;
+    revision: number;
+    object_count: number;
+    check_count: number;
+    run_count: number;
+    objects: WorldStateObject[];
+}
+
+export interface WorldStateObject {
+    id: number;
+    object_key: string;
+    type: string;
+    locator: Record<string, unknown>;
+    computed_status: string;
+    check_count: number;
+    run_count: number;
+    checks: WorldStateCheck[];
+}
+
+export interface WorldStateCheck {
+    id: number;
+    kind: string;
+    computed_status: string;
+    run_count: number;
+    runs: WorldStateRun[];
+}
+
+export interface WorldStateRun {
+    id: number;
+    tool_call_id: number | null;
+    parameters: Record<string, unknown>;
+    evidence: Record<string, unknown>;
+    execution_status: string;
+    verdict: string | null;
+    created_at: string;
+    started_at: string | null;
+    finished_at: string | null;
 }
 
 export interface LifecycleEntity {

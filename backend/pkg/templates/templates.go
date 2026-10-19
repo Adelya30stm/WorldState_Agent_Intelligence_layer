@@ -65,20 +65,20 @@ const (
 	PromptTypeQuestionExecutionMonitor PromptType = "question_execution_monitor" // question for adviser to monitor agent execution progress
 	PromptTypeQuestionTaskPlanner      PromptType = "question_task_planner"      // question for adviser to create execution plan for agent
 	PromptTypeTaskAssignmentWrapper    PromptType = "task_assignment_wrapper"    // wraps original request with execution plan for specialist agents
-	PromptTypeWebPlanner               PromptType = "web_planner"               // plans scope, RoE, and threat model for web pentest
-	PromptTypeQuestionWebPlanner       PromptType = "question_web_planner"      // human input for planning phase
-	PromptTypeWebRecon                 PromptType = "web_recon"                 // performs passive and active reconnaissance
-	PromptTypeQuestionWebRecon         PromptType = "question_web_recon"        // human input for recon phase
-	PromptTypeWebMapper                PromptType = "web_mapper"                // crawls and maps the full attack surface
-	PromptTypeQuestionWebMapper        PromptType = "question_web_mapper"       // human input for mapping phase
-	PromptTypeWebTester                PromptType = "web_tester"                // tests discovered surfaces for vulnerabilities
-	PromptTypeQuestionWebTester        PromptType = "question_web_tester"       // human input for testing phase
-	PromptTypeWebValidator             PromptType = "web_validator"             // validates and calibrates severity of findings
-	PromptTypeQuestionWebValidator     PromptType = "question_web_validator"    // human input for validation phase
-	PromptTypeWebAttackPaths           PromptType = "web_attack_paths"          // constructs multi-step attack chains and MITRE mapping
-	PromptTypeQuestionWebAttackPaths   PromptType = "question_web_attack_paths" // human input for attack paths phase
-	PromptTypeWebReporter              PromptType = "web_reporter"              // produces executive + technical pentest report
-	PromptTypeQuestionWebReporter      PromptType = "question_web_reporter"     // human input for reporting phase
+	PromptTypeWebPlanner               PromptType = "web_planner"                // plans scope, RoE, and threat model for web pentest
+	PromptTypeQuestionWebPlanner       PromptType = "question_web_planner"       // human input for planning phase
+	PromptTypeWebRecon                 PromptType = "web_recon"                  // performs passive and active reconnaissance
+	PromptTypeQuestionWebRecon         PromptType = "question_web_recon"         // human input for recon phase
+	PromptTypeWebMapper                PromptType = "web_mapper"                 // crawls and maps the full attack surface
+	PromptTypeQuestionWebMapper        PromptType = "question_web_mapper"        // human input for mapping phase
+	PromptTypeWebTester                PromptType = "web_tester"                 // tests discovered surfaces for vulnerabilities
+	PromptTypeQuestionWebTester        PromptType = "question_web_tester"        // human input for testing phase
+	PromptTypeWebValidator             PromptType = "web_validator"              // validates and calibrates severity of findings
+	PromptTypeQuestionWebValidator     PromptType = "question_web_validator"     // human input for validation phase
+	PromptTypeWebAttackPaths           PromptType = "web_attack_paths"           // constructs multi-step attack chains and MITRE mapping
+	PromptTypeQuestionWebAttackPaths   PromptType = "question_web_attack_paths"  // human input for attack paths phase
+	PromptTypeWebReporter              PromptType = "web_reporter"               // produces executive + technical pentest report
+	PromptTypeQuestionWebReporter      PromptType = "question_web_reporter"      // human input for reporting phase
 )
 
 var PromptVariables = map[PromptType][]string{
@@ -279,6 +279,7 @@ var PromptVariables = map[PromptType][]string{
 		"ToolPlaceholder",
 	},
 	PromptTypeSubtasksGenerator: {
+		"WorldState",
 		"Task",
 		"Tasks",
 		"Subtasks",
@@ -298,6 +299,7 @@ var PromptVariables = map[PromptType][]string{
 		"ToolPlaceholder",
 	},
 	PromptTypeSubtasksRefiner: {
+		"WorldState",
 		"Task",
 		"Tasks",
 		"PlannedSubtasks",
@@ -504,19 +506,19 @@ type AgentPrompts struct {
 }
 
 type AgentsPrompts struct {
-	PrimaryAgent  AgentPrompt
-	Assistant     AgentPrompt
-	Pentester     AgentPrompts
-	Coder         AgentPrompts
-	Installer     AgentPrompts
-	Searcher      AgentPrompts
-	Memorist      AgentPrompts
-	Adviser       AgentPrompts
-	Generator     AgentPrompts
-	Refiner       AgentPrompts
-	Reporter      AgentPrompts
-	Reflector     AgentPrompts
-	Enricher      AgentPrompts
+	PrimaryAgent   AgentPrompt
+	Assistant      AgentPrompt
+	Pentester      AgentPrompts
+	Coder          AgentPrompts
+	Installer      AgentPrompts
+	Searcher       AgentPrompts
+	Memorist       AgentPrompts
+	Adviser        AgentPrompts
+	Generator      AgentPrompts
+	Refiner        AgentPrompts
+	Reporter       AgentPrompts
+	Reflector      AgentPrompts
+	Enricher       AgentPrompts
 	ToolCallFixer  AgentPrompts
 	Summarizer     AgentPrompt
 	WebPlanner     AgentPrompts

@@ -591,11 +591,11 @@ func TestAttackPlanMigrationDownUpSymmetry(t *testing.T) {
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatal(err)
 	}
-	if err := goose.Up(db, "sql"); err != nil {
+	if err := goose.UpTo(db, "sql", 20260817); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 	assertAttackPlanEvidenceRunIndex(t, db, true)
-	if err := goose.Down(db, "sql"); err != nil {
+	if err := goose.DownTo(db, "sql", 20260815); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
 	var table sql.NullString

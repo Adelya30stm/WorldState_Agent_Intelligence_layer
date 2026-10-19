@@ -302,6 +302,9 @@ func (ce *customExecutor) Execute(
 		obsWrapper.end("", err, time.Since(startTime).Seconds())
 		return "", fmt.Errorf("failed to create toolcall: %w", err)
 	}
+	ctx = context.WithValue(ctx, worldStateInvocationKey{}, worldStateInvocation{
+		CallID: id, ToolCallID: tc.ID, TaskID: tc.TaskID.Int64, SubtaskID: tc.SubtaskID.Int64,
+	})
 
 	wrapHandler := func(ctx context.Context, name string, args json.RawMessage) (string, database.MsglogResultFormat, error) {
 		resultFormat := getMessageResultFormat(name)

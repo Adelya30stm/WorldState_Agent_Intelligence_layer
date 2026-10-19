@@ -24,6 +24,7 @@ func CreateDummyTemplateData() map[string]any {
 	barrierTools := createBarrierTools()
 
 	return map[string]any{
+		"WorldState": `<world_state status="empty"/>`,
 		// Tool names - exact values from tools package constants
 		"FinalyToolName":            tools.FinalyToolName,
 		"SearchToolName":            tools.SearchToolName,

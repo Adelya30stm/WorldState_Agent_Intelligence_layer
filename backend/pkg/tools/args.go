@@ -146,11 +146,18 @@ type GraphitiSearchAction struct {
 }
 
 type WorldStateQueryAction struct {
-	Type    string   `json:"type,omitempty" jsonschema:"enum=host,enum=endpoint,enum=service,enum=credential,enum=finding" jsonschema_description:"Optional single entity type filter. Combined with types when both are set"`
-	Types   []string `json:"types,omitempty" jsonschema_description:"Optional entity type filters (host, endpoint, service, credential, finding). OR-matched with type"`
-	State   string   `json:"state,omitempty" jsonschema:"enum=unknown,enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Optional single lifecycle state filter. Combined with states when both are set"`
-	States  []string `json:"states,omitempty" jsonschema_description:"Optional lifecycle state filters (e.g. discovered and scanning). OR-matched with state"`
-	Message string   `json:"message" jsonschema:"required,title=Query message" jsonschema_description:"Short user-facing note about why you are querying world state, in the user's language"`
+	Type         string   `json:"type,omitempty" jsonschema_description:"Optional object type filter, e.g. host, endpoint, parameter. Legacy flows also expose credential and finding entities."`
+	Types        []string `json:"types,omitempty" jsonschema_description:"Optional entity type filters for legacy model_version 1 (host, endpoint, service, credential, finding). OR-matched with type"`
+	State        string   `json:"state,omitempty" jsonschema_description:"Optional computed object status filter: unknown, in_progress, vulnerable, not_confirmed, inconclusive. Legacy flows use lifecycle states instead."`
+	States       []string `json:"states,omitempty" jsonschema_description:"Optional lifecycle state filters for legacy model_version 1. OR-matched with state"`
+	ObjectID     *Int64   `json:"object_id,omitempty" jsonschema:"type=integer" jsonschema_description:"Return this object and its checks, scoped to the current flow"`
+	CheckID      *Int64   `json:"check_id,omitempty" jsonschema:"type=integer" jsonschema_description:"Return this check and its object, scoped to the current flow"`
+	Kind         string   `json:"kind,omitempty" jsonschema_description:"Optional check kind filter, e.g. xss or sqli"`
+	ObjectLimit  *Int64   `json:"object_limit,omitempty" jsonschema:"type=integer,minimum=1,maximum=100" jsonschema_description:"Objects per page (default 20, maximum 100)"`
+	ObjectOffset *Int64   `json:"object_offset,omitempty" jsonschema:"type=integer,minimum=0" jsonschema_description:"Object pagination offset (default 0)"`
+	RunLimit     *Int64   `json:"run_limit,omitempty" jsonschema:"type=integer,minimum=1,maximum=100" jsonschema_description:"Runs per check (default 20, maximum 100); use check_id and run_offset to retrieve other runs"`
+	RunOffset    *Int64   `json:"run_offset,omitempty" jsonschema:"type=integer,minimum=0" jsonschema_description:"Run pagination offset within each check (default 0)"`
+	Message      string   `json:"message" jsonschema:"required,title=Query message" jsonschema_description:"Short user-facing note about why you are querying world state, in the user's language"`
 }
 
 type WorldStateUpdateItem struct {
@@ -161,12 +168,24 @@ type WorldStateUpdateItem struct {
 }
 
 type WorldStateUpdateAction struct {
-	EntityKey  string                 `json:"entity_key,omitempty" jsonschema_description:"Canonical key for a single-entity update. Ignored when entities is set"`
-	Type       string                 `json:"type,omitempty" jsonschema:"enum=host,enum=endpoint,enum=service,enum=credential,enum=finding" jsonschema_description:"Entity type for a single-entity update. Ignored when entities is set"`
-	ToState    string                 `json:"to_state,omitempty" jsonschema:"enum=discovered,enum=scanning,enum=assessed,enum=vulnerable,enum=exploited,enum=remediated" jsonschema_description:"Target lifecycle state for a single-entity update. Ignored when entities is set"`
-	Properties string                 `json:"properties,omitempty" jsonschema_description:"Optional JSON object string with extra entity properties for a single-entity update"`
-	Entities   []WorldStateUpdateItem `json:"entities,omitempty" jsonschema:"maxItems=50" jsonschema_description:"Batch of up to 50 entity updates. Prefer this over looping single calls. This tool is a function call, not a shell command"`
-	Message    string                 `json:"message" jsonschema:"required,title=Update message" jsonschema_description:"Short user-facing note describing what changed, in the user's language"`
+	Operation       string                 `json:"operation,omitempty" jsonschema:"enum=observe_object,enum=ensure_check,enum=start_run,enum=finish_run" jsonschema_description:"Required in model_version 2: observe_object(type, object_key, locator), ensure_check(object_id, kind), start_run(check_id, parameters), finish_run(run_id, execution_status, verdict, evidence)"`
+	ObjectKey       string                 `json:"object_key,omitempty" jsonschema_description:"Stable canonical object identity including target origin/port, HTTP method and parameter location/name when known"`
+	Type            string                 `json:"type,omitempty" jsonschema_description:"Object type for observe_object, e.g. host, endpoint, parameter. Legacy model_version 1 also uses this as entity type"`
+	Locator         map[string]any         `json:"locator,omitempty" jsonschema_description:"Structured object location for observe_object; JSON object with host/url/method/location/name, without verdicts or credentials"`
+	ObjectID        *Int64                 `json:"object_id,omitempty" jsonschema:"type=integer" jsonschema_description:"Object ID for ensure_check"`
+	Kind            string                 `json:"kind,omitempty" jsonschema_description:"Check kind for ensure_check, e.g. xss, sqli, ssrf, idor; variants belong in run parameters"`
+	CheckID         *Int64                 `json:"check_id,omitempty" jsonschema:"type=integer" jsonschema_description:"Check ID for start_run"`
+	RunID           *Int64                 `json:"run_id,omitempty" jsonschema:"type=integer" jsonschema_description:"Existing run ID returned by start_run, required for finish_run"`
+	ToolCallID      *Int64                 `json:"tool_call_id,omitempty" jsonschema:"type=integer" jsonschema_description:"Optional known database toolcalls.id for the actual experiment, not an LLM call ID. Omit when unknown; never guess."`
+	Parameters      map[string]any         `json:"parameters,omitempty" jsonschema_description:"Required JSON object for start_run: actual planned action, payload, role, encoding, target_revision and relevant pre-experiment context. Immutable after creation."`
+	ExecutionStatus string                 `json:"execution_status,omitempty" jsonschema:"enum=running,enum=completed,enum=failed,enum=cancelled" jsonschema_description:"start_run accepts running (the default); finish_run accepts completed/failed/cancelled"`
+	Verdict         *string                `json:"verdict,omitempty" jsonschema:"enum=vulnerable,enum=not_reproduced,enum=inconclusive" jsonschema_description:"Required when completed; omit for failed/cancelled experiments and put the failure reason in evidence"`
+	Evidence        map[string]any         `json:"evidence,omitempty" jsonschema_description:"Required JSON object for finish_run: observations, actual request/response, interpretation, duration/cost when known. Redact secrets; reflection alone does not prove script execution."`
+	EntityKey       string                 `json:"entity_key,omitempty" jsonschema_description:"Legacy model_version 1 only: canonical entity key"`
+	ToState         string                 `json:"to_state,omitempty" jsonschema_description:"Legacy model_version 1 only: target lifecycle state. Never set object/check status directly in model_version 2."`
+	Properties      string                 `json:"properties,omitempty" jsonschema_description:"Legacy model_version 1 only: JSON object string with extra entity properties"`
+	Entities        []WorldStateUpdateItem `json:"entities,omitempty" jsonschema:"maxItems=50" jsonschema_description:"Legacy model_version 1 batch of up to 50 entity updates. Prefer this over looping single calls"`
+	Message         string                 `json:"message" jsonschema:"required,title=Update message" jsonschema_description:"Short user-facing note describing what changed, in the user's language"`
 }
 
 type EnricherResult struct {

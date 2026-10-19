@@ -31,11 +31,11 @@ type Value struct {
 type FactKind string
 
 const (
-	FactCapturedHead     FactKind = "captured_head"
-	FactEntityState      FactKind = "entity_state"
-	FactEntityType       FactKind = "entity_type"
-	FactEntityVersion    FactKind = "entity_version"
-	FactEntityProperty   FactKind = "entity_property"
+	FactCapturedHead      FactKind = "captured_head"
+	FactEntityState       FactKind = "entity_state"
+	FactEntityType        FactKind = "entity_type"
+	FactEntityVersion     FactKind = "entity_version"
+	FactEntityProperty    FactKind = "entity_property"
 	FactSummaryStateCount FactKind = "summary_state_count"
 	FactSummaryTypeCount  FactKind = "summary_type_count"
 )
@@ -77,15 +77,15 @@ type Effect struct {
 }
 
 type Action struct {
-	NodeKey           string
-	Supported         bool
-	Preconditions     []Precondition
-	Effects           []Effect
-	Confidence        float64
-	ExpectedProgress  float64
-	InformationGain   float64
-	Cost              float64
-	OperationalRisk   float64
+	NodeKey          string
+	Supported        bool
+	Preconditions    []Precondition
+	Effects          []Effect
+	Confidence       float64
+	ExpectedProgress float64
+	InformationGain  float64
+	Cost             float64
+	OperationalRisk  float64
 	// EvaluationTime is a deterministic logical charge, never wall-clock time.
 	EvaluationTime time.Duration
 }
@@ -108,7 +108,7 @@ type SearchInput struct {
 }
 
 type Score struct {
-	Confidence              float64
+	Confidence               float64
 	ExpectedProgress         float64
 	InformationGain          float64
 	Cost                     float64
@@ -151,8 +151,8 @@ type Exclusion struct {
 }
 
 type SearchResult struct {
-	Frontier      []Candidate
-	Excluded      []Exclusion
+	Frontier       []Candidate
+	Excluded       []Exclusion
 	EvaluatedNodes int
 	EvaluationTime time.Duration
 }
@@ -402,7 +402,9 @@ func evidenceFacts(evidence worldstate.PlannerEvidence) map[FactRef]evidenceFact
 		contradictory := entityCounts[entity.Key] > 1
 		addEvidenceFact(facts, FactRef{Kind: FactEntityState, EntityKey: entity.Key}, stringValue(entity.State), contradictory)
 		addEvidenceFact(facts, FactRef{Kind: FactEntityType, EntityKey: entity.Key}, stringValue(entity.Type), contradictory)
-		addEvidenceFact(facts, FactRef{Kind: FactEntityVersion, EntityKey: entity.Key}, integerValue(int64(entity.Version)), contradictory)
+		if evidence.SchemaVersion != 2 {
+			addEvidenceFact(facts, FactRef{Kind: FactEntityVersion, EntityKey: entity.Key}, integerValue(int64(entity.Version)), contradictory)
+		}
 		for name, raw := range entity.Properties {
 			if value, ok := evidenceValue(raw); ok {
 				addEvidenceFact(facts, FactRef{Kind: FactEntityProperty, EntityKey: entity.Key, Name: name}, value, contradictory)
@@ -583,8 +585,8 @@ func valuesEqual(left, right Value) bool {
 	}
 }
 
-func unit(value float64) bool { return value >= 0 && value <= 1 && finite(value) }
-func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
-func integerValue(value int64) Value { return Value{Kind: ValueInteger, Integer: value} }
+func unit(value float64) bool         { return value >= 0 && value <= 1 && finite(value) }
+func finite(value float64) bool       { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+func integerValue(value int64) Value  { return Value{Kind: ValueInteger, Integer: value} }
 func numberValue(value float64) Value { return Value{Kind: ValueNumber, Number: value} }
-func stringValue(value string) Value { return Value{Kind: ValueString, String: value} }
+func stringValue(value string) Value  { return Value{Kind: ValueString, String: value} }

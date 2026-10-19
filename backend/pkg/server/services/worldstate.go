@@ -204,12 +204,75 @@ func detectTool(cmd string) (name, risk string) {
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 type WorldStateService struct {
-	db      *gorm.DB
+	db       *gorm.DB
 	graphiti graphitiSearcher
 }
 
 func NewWorldStateService(db *gorm.DB, graphitiClient graphitiSearcher) *WorldStateService {
 	return &WorldStateService{db: db, graphiti: graphitiClient}
+}
+
+// GetModel returns the persisted object/check/run model for a flow. Legacy flows
+// return their schema version without fabricating checks from old graph data.
+// @Summary Get persisted World State objects, checks and runs
+// @Tags WorldState
+// @Produce json
+// @Security BearerAuth
+// @Param flowID path int true "flow id" minimum(1)
+// @Success 200 {object} response.successResp{data=worldstate.ModelSnapshot}
+// @Failure 403 {object} response.errorResp
+// @Failure 404 {object} response.errorResp
+// @Failure 500 {object} response.errorResp
+// @Router /flows/{flowID}/worldstate/model [get]
+func (s *WorldStateService) GetModel(c *gin.Context) {
+	flowID, err := strconv.ParseInt(c.Param("flowID"), 10, 64)
+	if err != nil || flowID <= 0 {
+		response.Error(c, response.ErrFlowsInvalidRequest, err)
+		return
+	}
+
+	uid := c.GetUint64("uid")
+	privs := c.GetStringSlice("prm")
+	var flow models.Flow
+	var scope func(db *gorm.DB) *gorm.DB
+	if slices.Contains(privs, "flows.admin") {
+		scope = func(db *gorm.DB) *gorm.DB { return db.Where("id = ?", flowID) }
+	} else if slices.Contains(privs, "flows.view") {
+		scope = func(db *gorm.DB) *gorm.DB { return db.Where("id = ? AND user_id = ?", flowID, uid) }
+	} else {
+		response.Error(c, response.ErrNotPermitted, nil)
+		return
+	}
+	if err = s.db.Model(&flow).Scopes(scope).Take(&flow).Error; err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			response.Error(c, response.ErrFlowsNotFound, err)
+		} else {
+			response.Error(c, response.ErrInternal, err)
+		}
+		return
+	}
+
+	queries := database.New(s.db.DB())
+	version, err := worldstate.ModelVersion(c.Request.Context(), queries, flowID)
+	if err != nil {
+		logger.FromContext(c).WithError(err).Error("world state schema version query failed")
+		response.Error(c, response.ErrInternal, err)
+		return
+	}
+	if version == 1 {
+		response.Success(c, http.StatusOK, worldstate.ModelSnapshot{
+			SchemaVersion: version, FlowID: flowID, Objects: []worldstate.Object{},
+		})
+		return
+	}
+
+	snapshot, err := worldstate.NewModelStore(queries).ReadSnapshot(c.Request.Context(), flowID)
+	if err != nil {
+		logger.FromContext(c).WithError(err).Error("world state model query failed")
+		response.Error(c, response.ErrInternal, err)
+		return
+	}
+	response.Success(c, http.StatusOK, snapshot)
 }
 
 // GetWorldState aggregates flow data into a normalized World State
@@ -855,4 +918,3 @@ func (s *WorldStateService) GetToolCalls(c *gin.Context) {
 		ToolCalls: calls,
 	})
 }
-

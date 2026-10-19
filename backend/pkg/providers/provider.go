@@ -153,10 +153,11 @@ type flowProvider struct {
 
 	summarizer csum.Summarizer
 
-	maxGACallsLimit int
-	maxLACallsLimit int
-	buildMonitor    executionMonitorBuilder
-	worldState      primaryWorldStateTurnInjector
+	maxGACallsLimit   int
+	maxLACallsLimit   int
+	buildMonitor      executionMonitorBuilder
+	worldState        primaryWorldStateTurnInjector
+	requestWorldState worldStateRequestContext
 
 	provider.Provider
 }
@@ -1049,6 +1050,16 @@ func (fp *flowProvider) updateMsgLogResult(
 // worldStateProjection returns a compact XML snapshot for planner prompts.
 // Failures are soft — empty/unavailable state must not block planning.
 func (fp *flowProvider) worldStateProjection(ctx context.Context) string {
+	version, err := worldstate.ModelVersion(ctx, fp.db, fp.flowID)
+	if err != nil {
+		logrus.WithContext(ctx).WithError(err).Warn("failed to load World State schema for planner")
+		return ""
+	}
+	// Generator/refiner templates become persisted messages. New flows receive
+	// their snapshot separately at callWithRetries, just like other agent turns.
+	if version == 2 {
+		return ""
+	}
 	proj, err := worldstate.BuildProjection(ctx, fp.db, fp.flowID)
 	if err != nil {
 		logrus.WithContext(ctx).WithError(err).WithField("flow_id", fp.flowID).

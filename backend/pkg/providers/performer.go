@@ -347,6 +347,7 @@ func (fp *flowProvider) execToolCall(
 		err      error
 		response string
 	)
+	ctx = tools.WithWorldStateChain(ctx, chainID)
 
 	for idx := 0; idx <= maxRetriesToCallFunction; idx++ {
 		if idx == maxRetriesToCallFunction {
@@ -521,11 +522,18 @@ func (fp *flowProvider) callWithRetries(
 			}
 		}
 
-		resp, err = fp.CallWithTools(ctx, optAgentType, chain, executor.Tools(), streamCb)
+		requestChain, worldStateView, prepareErr := fp.prepareWorldStateRequest(ctx, chain)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		resp, err = fp.CallWithTools(ctx, optAgentType, requestChain, executor.Tools(), streamCb)
 		if err == nil {
 			err = fillResult(resp)
 		}
 		if err == nil {
+			if ackErr := fp.acknowledgeWorldStateRequest(ctx, optAgentType, chainID, worldStateView); ackErr != nil {
+				logger.WithError(ackErr).Warn("failed to acknowledge World State request revision")
+			}
 			break
 		} else {
 			errs = append(errs, err)

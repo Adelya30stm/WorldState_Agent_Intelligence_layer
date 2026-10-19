@@ -20,10 +20,12 @@ func DefaultPlannerEvidenceLimits() PlannerEvidenceLimits {
 }
 
 type PlannerEvidence struct {
-	FlowID       int64                     `json:"flow_id"`
-	CapturedHead int64                     `json:"captured_head"`
-	Projection   PlannerEvidenceProjection `json:"projection"`
-	Journal      PlannerEvidenceJournal    `json:"journal"`
+	SchemaVersion int32                     `json:"schema_version,omitempty"`
+	Model         *ModelContext             `json:"model,omitempty"`
+	FlowID        int64                     `json:"flow_id"`
+	CapturedHead  int64                     `json:"captured_head"`
+	Projection    PlannerEvidenceProjection `json:"projection"`
+	Journal       PlannerEvidenceJournal    `json:"journal"`
 }
 
 type PlannerEvidenceProjection struct {
@@ -133,6 +135,19 @@ func (b *PlannerEvidenceBuilder) Build(ctx context.Context, flowID int64) (evide
 }
 
 func (b *PlannerEvidenceBuilder) build(ctx context.Context, reader PrimaryDeliveryReader, flowID int64) (PlannerEvidence, error) {
+	if q, ok := reader.(*database.Queries); ok {
+		version, err := ModelVersion(ctx, q, flowID)
+		if err != nil {
+			return PlannerEvidence{}, err
+		}
+		if version == 2 {
+			snapshot, err := readModelSnapshot(ctx, q, flowID)
+			if err != nil {
+				return PlannerEvidence{}, err
+			}
+			return modelPlannerEvidence(snapshot, b.limits)
+		}
+	}
 	head, err := reader.GetWorldStateEventHead(ctx, flowID)
 	if err != nil {
 		return PlannerEvidence{}, fmt.Errorf("worldstate: capture planner evidence head: %w", err)
@@ -373,6 +388,8 @@ func fitPlannerEvidence(evidence PlannerEvidence, maxBytes int) (PlannerEvidence
 			return evidence, nil
 		}
 		switch {
+		case evidence.Model != nil && evidence.Model.removeDetail():
+			evidence.Model.updateOmitted()
 		case len(evidence.Journal.Events) > 0:
 			evidence.Journal.Events = evidence.Journal.Events[1:]
 			evidence.Journal.OmittedEvents++
