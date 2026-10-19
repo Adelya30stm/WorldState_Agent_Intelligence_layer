@@ -239,11 +239,4 @@ func TestModelStoreOwnershipRollbackAndVersions(t *testing.T) {
 	if _, err := s.StartRun(ctx, f.flowID, AgentSystem, StartRunInput{CheckID: check.ID, ToolCallID: &foreignTool}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("crossflow tool accepted: %v", err)
 	}
-	legacy := newStoreFixture(t)
-	if version, err := ModelVersion(ctx, legacy.q, legacy.flowID); err != nil || version != 1 {
-		t.Fatalf("legacy version=%d err=%v", version, err)
-	}
-	if _, err := NewModelStore(legacy.q).ReadSnapshot(ctx, legacy.flowID); !errors.Is(err, ErrModelVersion) {
-		t.Fatalf("legacy flow silently read as empty v2: %v", err)
-	}
 }

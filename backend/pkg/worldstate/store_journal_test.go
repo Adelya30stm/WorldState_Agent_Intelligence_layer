@@ -276,13 +276,20 @@ func TestStoreJournalsConcurrentMutations(t *testing.T) {
 	})
 
 	t.Run("automatic discovery journals committed outcome", func(t *testing.T) {
-		IngestToolResult(ctx, f.q, f.flowID, "terminal", "nmap -sV scan-journal.example.invalid")
-		entity, err := f.q.GetWorldStateEntityByKey(ctx, database.GetWorldStateEntityByKeyParams{FlowID: f.flowID, EntityKey: "host:scan-journal.example.invalid"})
-		if err != nil {
+		IngestToolResult(ctx, f.q, f.flowID, "terminal", "http://scan-journal.example.invalid/")
+		var objects int
+		if err := f.db.QueryRow(`SELECT count(*) FROM world_state_objects WHERE flow_id=$1 AND locator->>'host'=$2`, f.flowID, "scan-journal.example.invalid").Scan(&objects); err != nil {
 			t.Fatal(err)
 		}
-		if entity.State != database.WorldStateLifecycleScanning || eventCount(t, f.db, f.flowID, entity.EntityKey) != 3 {
-			t.Fatalf("automatic state=%s events=%d", entity.State, eventCount(t, f.db, f.flowID, entity.EntityKey))
+		if objects == 0 {
+			t.Fatal("automatic discovery did not record the host object")
+		}
+		var entities int
+		if err := f.db.QueryRow(`SELECT count(*) FROM world_state_entities WHERE flow_id=$1 AND entity_key=$2`, f.flowID, "host:scan-journal.example.invalid").Scan(&entities); err != nil {
+			t.Fatal(err)
+		}
+		if entities != 0 {
+			t.Fatalf("discovery wrote a legacy entity: %d", entities)
 		}
 	})
 }
@@ -308,7 +315,7 @@ func newStoreFixture(t *testing.T) storeFixture {
 		db.Close()
 		t.Skipf("store schema unavailable: %v", err)
 	}
-	if err := db.QueryRow(`INSERT INTO flows(model,model_provider_name,model_provider_type,language,tool_call_id_template,user_id,world_state_schema_version) VALUES('m','p','openai','en','',$1,1) RETURNING id`, f.userID).Scan(&f.flowID); err != nil {
+	if err := db.QueryRow(`INSERT INTO flows(model,model_provider_name,model_provider_type,language,tool_call_id_template,user_id,world_state_schema_version) VALUES('m','p','openai','en','',$1,2) RETURNING id`, f.userID).Scan(&f.flowID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

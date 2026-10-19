@@ -20,12 +20,18 @@ func TestWorldStateModelMigrationPreservesLegacyFlows(t *testing.T) {
 	if err := db.QueryRow(`INSERT INTO world_state_entities(flow_id,type,entity_key) VALUES($1,'host','host:legacy.example') RETURNING id`, old.flowID).Scan(&legacyEntity); err != nil {
 		t.Fatal(err)
 	}
-	if err := goose.Up(db, "sql"); err != nil {
+	if err := goose.UpTo(db, "sql", 20260910); err != nil {
 		t.Fatal(err)
 	}
 	var version int
 	if err := db.QueryRow(`SELECT world_state_schema_version FROM flows WHERE id=$1`, old.flowID).Scan(&version); err != nil || version != 1 {
 		t.Fatalf("existing flow version=%d err=%v", version, err)
+	}
+	if err := goose.Up(db, "sql"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT world_state_schema_version FROM flows WHERE id=$1`, old.flowID).Scan(&version); err != nil || version != 2 {
+		t.Fatalf("promoted flow version=%d err=%v", version, err)
 	}
 	fresh := createDeliveryFixture(t, db, "after-model")
 	if err := db.QueryRow(`SELECT world_state_schema_version FROM flows WHERE id=$1`, fresh.flowID).Scan(&version); err != nil || version != 2 {

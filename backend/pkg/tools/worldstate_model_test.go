@@ -16,32 +16,6 @@ func (*modelToolVersionDB) GetWorldStateModelVersion(context.Context, int64) (in
 	return 2, nil
 }
 
-type legacyToolVersionDB struct{ database.Querier }
-
-func (*legacyToolVersionDB) GetWorldStateModelVersion(context.Context, int64) (int32, error) {
-	return 1, nil
-}
-
-func (*legacyToolVersionDB) GetWorldStateEntitiesByFlow(context.Context, int64) ([]database.WorldStateEntity, error) {
-	return []database.WorldStateEntity{{EntityKey: "host:legacy.invalid", Type: "host", State: database.WorldStateLifecycleDiscovered}}, nil
-}
-
-func TestWorldStateLegacyQueryReportsItsSchema(t *testing.T) {
-	tool := NewWorldStateTool(1, &legacyToolVersionDB{}, "pentester")
-	result, err := tool.Handle(context.Background(), WorldStateQueryToolName, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var response struct {
-		Version  int               `json:"schema_version"`
-		Count    int               `json:"count"`
-		Entities []json.RawMessage `json:"entities"`
-	}
-	if err := json.Unmarshal([]byte(result), &response); err != nil || response.Version != 1 || response.Count != 1 || len(response.Entities) != 1 {
-		t.Fatalf("legacy output lost its version or entities: %s err=%v", result, err)
-	}
-}
-
 func TestWorldStateModelRejectsInvalidUpdatesBeforeWriting(t *testing.T) {
 	tool := NewWorldStateTool(1, &modelToolVersionDB{}, "pentester")
 	for _, args := range []string{
